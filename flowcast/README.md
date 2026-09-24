@@ -2,7 +2,20 @@
 An AI-driven traffic analytics platform that predicts traffic volume, congestion, travel time, and accident risk using sensor, weather, and calendar data, helping city traffic authorities make proactive traffic management decisions.
 
 
-## Data Ingestion & Validation
+## Data Ingestion & Validation  M1
+
+**Code:** `src/ingest.py` implements three loader functions — `load_calendar()`,
+`load_weather()`, `load_traffic()` — each performing schema validation,
+type/date parsing, and flagging (not fixing) every documented data-quality
+defect: duplicates, missing values, impossible values, and label
+inconsistency. Fixing is deliberately deferred to `src/clean.py` (M2), so
+validation and remediation remain independently auditable.
+
+**Verification:** Running `python src/ingest.py` standalone reproduces the
+exact defect counts found manually during EDA (see `notebooks/01_raw_data_profiling.ipynb`) —
+this agreement between independent exploration and the automated pipeline is
+the evidence that the validation logic is correct, not merely that it executes
+without error.
 
 Raw data (3 CSVs, ~178K traffic rows across 25 road segments, Jan–May 2025)
 is loaded and validated in `src/ingest.py`. This stage flags data-quality
@@ -20,4 +33,3 @@ keeping validation and remediation independently auditable.
   weather_station_id and weather's station_id (no orphaned keys)
 
 
-  
