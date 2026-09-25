@@ -33,3 +33,21 @@ keeping validation and remediation independently auditable.
   weather_station_id and weather's station_id (no orphaned keys)
 
 
+
+### Statistical Outlier Handling
+
+Outliers were detected using IQR bounds computed *within* each
+congestion_level group rather than globally. An initial global-IQR pass
+flagged 4,705 avg_speed outliers, 85% of which fell under Severe
+congestion — meaning the naive approach was mostly flagging real
+slow-traffic conditions as "wrong," not detecting sensor errors. Grouped
+IQR (per congestion_level) reduced this to 527, concentrated in
+Free-flow conditions where an unusually slow reading is genuinely
+suspicious.
+
+Decision: outliers are flagged (`*_is_outlier` boolean columns) but not
+nulled or imputed. This is a conservative choice — no real sensor
+readings are altered or fabricated — and the flags remain available as
+potential model features (an "anomalous reading" signal may itself be
+predictive).
+
