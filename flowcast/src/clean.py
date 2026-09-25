@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import logging
+import  json
 
 logger = logging.getLogger("clean")
 
@@ -171,11 +172,43 @@ def harmonize_weather_labels(w: pd.DataFrame) -> pd.DataFrame:
 
     return w
 
+
+
+
+def parse_vehicle_dist(t: pd.DataFrame) -> pd.DataFrame:
+    """
+    Parse the vehicle_type_dist JSON string column into 4 separate
+    numeric columns: pct_2w, pct_car, pct_lcv, pct_hcv.
+
+    Keeping these as separate float columns (rather than one JSON
+    string) is necessary before they can be used as model features —
+    most ML libraries can't consume a nested JSON string directly.
+    """
+    def safe_parse(val):
+        if pd.isnull(val):
+            return {}
+        try:
+            return json.loads(val)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+
+    parsed = t["vehicle_type_dist"].apply(safe_parse)
+
+    t["pct_2w"] = parsed.apply(lambda d: d.get("2W", np.nan))
+    t["pct_car"] = parsed.apply(lambda d: d.get("Car", np.nan))
+    t["pct_lcv"] = parsed.apply(lambda d: d.get("LCV", np.nan))
+    t["pct_hcv"] = parsed.apply(lambda d: d.get("HCV", np.nan))
+
+    n_failed = parsed.apply(lambda d: len(d) == 0).sum()
+    logger.info(f"Parsed vehicle_type_dist: {len(t) - n_failed} succeeded, {n_failed} failed/empty")
+
+    return t
+
 """checking all the functions are working and printing their results"""
 
 
 if __name__ == "__main__":
-    from ingest import load_traffic,load_weather
+    from ingest import load_traffic,load_weather,load_calendar
 
     t = load_traffic("data/raw/traffic_sensor_log.csv")
     t = deduplicate_traffic(t)
@@ -184,6 +217,7 @@ if __name__ == "__main__":
     t = impute_missing(t, ["traffic_volume", "avg_speed", "occupancy"])
     w = load_weather("data/raw/weather_observations.csv")
     w = harmonize_weather_labels(w)
+    t = parse_vehicle_dist(t)
 
     
     flagged = t[t["avg_speed_is_outlier"]]
@@ -197,5 +231,5 @@ if __name__ == "__main__":
     print("After:", sorted(w["weather_condition_clean"].dropna().unique()))
     print("\nFinal category counts:")
     print(w["weather_condition_clean"].value_counts())
-
-
+    print("\nParsed vehicle columns:")
+    print(t[["pct_2w", "pct_car", "pct_lcv", "pct_hcv"]].describe())
