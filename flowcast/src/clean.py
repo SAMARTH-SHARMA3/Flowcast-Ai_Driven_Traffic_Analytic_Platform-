@@ -89,6 +89,42 @@ def flag_statistical_outliers_grouped(
     return t
 
 
+
+def impute_missing(t: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
+    """
+    Fill missing values (original raw gaps + impossible-value nulls
+    from fix_impossible_values) using grouped median imputation: for
+    each road_id + hour + day_of_week combination, fill gaps with that
+    group's median. This preserves time-of-day/road-specific traffic
+    patterns instead of flattening everything to one global average.
+
+    Falls back to a global median if a specific group has no valid
+    values at all to compute a median from.
+
+    NOTE: statistical outliers (flagged in the previous step) are
+    intentionally NOT touched here — they were kept as real data by
+    design, so they were never turned into NaN and have nothing to
+    impute.
+    """
+    t["hour"] = pd.to_datetime(t["time"], format="%H:%M").dt.hour
+    t["day_of_week"] = pd.to_datetime(t["date"]).dt.dayofweek  # 0=Monday
+
+    for col in cols:
+        n_before = t[col].isnull().sum()
+
+        group_median = t.groupby(["road_id", "hour", "day_of_week"])[col].transform("median")
+        t[col] = t[col].fillna(group_median)
+
+        # fallback for any road/hour/day combo with zero valid values
+        global_median = t[col].median()
+        t[col] = t[col].fillna(global_median)
+
+        n_after = t[col].isnull().sum()
+        logger.info(f"{col}: imputed {n_before - n_after} values (grouped median by road/hour/day)")
+
+    return t
+
+
 # to check the statistical outlier section
 
 
@@ -99,6 +135,7 @@ if __name__ == "__main__":
     t = deduplicate_traffic(t)
     t = fix_impossible_values(t)
     t = flag_statistical_outliers_grouped(t, ["traffic_volume", "avg_speed", "occupancy"])
+    t = impute_missing(t, ["traffic_volume", "avg_speed", "occupancy"])
 
     # Check the distribution BEFORE deciding whether to null anything —
     # this is the diagnostic that caught the global-IQR bias earlier.
@@ -108,5 +145,6 @@ if __name__ == "__main__":
 
     print("\nFinal shape:", t.shape)
     print(t[[c for c in t.columns if "_is_outlier" in c]].sum())
+    print(t[["traffic_volume", "avg_speed", "occupancy"]].isnull().sum())
 
-    
+
