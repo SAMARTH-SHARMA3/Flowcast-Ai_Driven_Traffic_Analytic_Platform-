@@ -20,19 +20,6 @@ def deduplicate_traffic(t: pd.DataFrame) -> pd.DataFrame:
     return t
 
 
-
-# to test this
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    from ingest import load_traffic
-
-    t = load_traffic("data/raw/traffic_sensor_log.csv")
-    t = deduplicate_traffic(t)
-    print("Final shape:", t.shape)
-
-
-
 def fix_impossible_values(t: pd.DataFrame) -> pd.DataFrame:
     """
     Null out physically impossible readings: negative traffic_volume,
@@ -58,19 +45,6 @@ def fix_impossible_values(t: pd.DataFrame) -> pd.DataFrame:
     )
     return t
 
-
-
-# to test the second block
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    from ingest import load_traffic
-
-    t = load_traffic("data/raw/traffic_sensor_log.csv")
-    t = deduplicate_traffic(t)
-    t = fix_impossible_values(t)
-    print("Final shape:", t.shape)
-    print(t[["traffic_volume", "avg_speed", "occupancy"]].isnull().sum())
 
 
 def flag_statistical_outliers_grouped(
@@ -133,3 +107,6 @@ if __name__ == "__main__":
     print(flagged["congestion_level"].value_counts())
 
     print("\nFinal shape:", t.shape)
+    print(t[[c for c in t.columns if "_is_outlier" in c]].sum())
+
+    
