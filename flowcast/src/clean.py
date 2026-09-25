@@ -175,7 +175,7 @@ def harmonize_weather_labels(w: pd.DataFrame) -> pd.DataFrame:
 
 
 if __name__ == "__main__":
-    from ingest import load_traffic
+    from ingest import load_traffic,load_weather
 
     t = load_traffic("data/raw/traffic_sensor_log.csv")
     t = deduplicate_traffic(t)
