@@ -63,3 +63,14 @@ median for any group with no valid values. This preserves realistic
 time-of-day and road-specific traffic patterns instead of flattening
 gaps to a single corridor-wide average.
 
+### Weather Label Harmonization
+
+weather_condition had 13 raw variants (case differences, trailing
+whitespace, alternate spellings like 'rainy'/'foggy') representing only
+4 real categories. Normalized via lowercase + strip, then mapped to the
+data dictionary's controlled vocabulary (Clear/Cloudy/Rain/Fog).
+Overcast was folded into Cloudy, since it isn't one of the 4 documented
+target categories. Result: Clear 8,168 (75%) · Cloudy 2,202 (20%) ·
+Rain 426 (4%) · Fog 76 (0.7%) — total matches raw row count exactly,
+confirming no data loss.
+

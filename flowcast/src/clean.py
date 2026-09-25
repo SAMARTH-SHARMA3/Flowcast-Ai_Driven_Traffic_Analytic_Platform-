@@ -125,7 +125,53 @@ def impute_missing(t: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
     return t
 
 
-# to check the statistical outlier section
+def harmonize_weather_labels(w: pd.DataFrame) -> pd.DataFrame:
+    """
+    Normalize weather_condition to the 4 controlled-vocabulary values
+    from the data dictionary: Clear, Cloudy, Rain, Fog.
+
+    Raw data has 13 variants of these 4 categories (case differences,
+    trailing whitespace, alternate spellings like 'rainy'/'foggy').
+    Overcast is folded into Cloudy since it's not one of the 4
+    documented target categories, and the two are close enough
+    conceptually for this dataset's purposes.
+    """
+    mapping = {
+        "clear": "Clear", "CLEAR": "Clear", "Clear": "Clear",
+        "cloudy": "Cloudy", "Cloudy": "Cloudy", "Overcast": "Cloudy",
+        "rain": "Rain", "RAIN": "Rain", "Rain": "Rain",
+        "rainy": "Rain", "rain ": "Rain",
+        "fog": "Fog", "FOG": "Fog", "Fog": "Fog", "foggy": "Fog",
+    }
+
+    # Strip whitespace and normalize case FIRST, so the mapping dict
+    # itself can be much shorter (no need to enumerate every
+    # capitalization) — but keep the explicit mapping too, as a safety
+    # net that catches anything the strip/lower pass doesn't expect.
+    cleaned = w["weather_condition"].str.strip().str.lower()
+
+    lower_mapping = {
+        "clear": "Clear",
+        "cloudy": "Cloudy", "overcast": "Cloudy",
+        "rain": "Rain", "rainy": "Rain",
+        "fog": "Fog", "foggy": "Fog",
+    }
+
+    w["weather_condition_clean"] = cleaned.map(lower_mapping)
+
+    # Anything that didn't match the map becomes NaN — catch and log it
+    # rather than letting it silently disappear.
+    unmapped = w[w["weather_condition_clean"].isnull()]["weather_condition"].unique()
+    if len(unmapped) > 0:
+        logger.warning(f"weather_condition values not covered by mapping: {unmapped}")
+
+    n_changed = (w["weather_condition"] != w["weather_condition_clean"]).sum()
+    logger.info(f"Harmonized weather_condition: {n_changed} values normalized")
+    logger.info(f"Final categories: {sorted(w['weather_condition_clean'].dropna().unique())}")
+
+    return w
+
+"""checking all the functions are working and printing their results"""
 
 
 if __name__ == "__main__":
@@ -136,9 +182,10 @@ if __name__ == "__main__":
     t = fix_impossible_values(t)
     t = flag_statistical_outliers_grouped(t, ["traffic_volume", "avg_speed", "occupancy"])
     t = impute_missing(t, ["traffic_volume", "avg_speed", "occupancy"])
+    w = load_weather("data/raw/weather_observations.csv")
+    w = harmonize_weather_labels(w)
 
-    # Check the distribution BEFORE deciding whether to null anything —
-    # this is the diagnostic that caught the global-IQR bias earlier.
+    
     flagged = t[t["avg_speed_is_outlier"]]
     print("\navg_speed outliers by congestion_level (grouped IQR):")
     print(flagged["congestion_level"].value_counts())
@@ -146,5 +193,9 @@ if __name__ == "__main__":
     print("\nFinal shape:", t.shape)
     print(t[[c for c in t.columns if "_is_outlier" in c]].sum())
     print(t[["traffic_volume", "avg_speed", "occupancy"]].isnull().sum())
+    print("\nBefore:", sorted(w["weather_condition"].unique()))
+    print("After:", sorted(w["weather_condition_clean"].dropna().unique()))
+    print("\nFinal category counts:")
+    print(w["weather_condition_clean"].value_counts())
 
 
