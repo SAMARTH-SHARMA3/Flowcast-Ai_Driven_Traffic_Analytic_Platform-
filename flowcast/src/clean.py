@@ -71,3 +71,65 @@ if __name__ == "__main__":
     t = fix_impossible_values(t)
     print("Final shape:", t.shape)
     print(t[["traffic_volume", "avg_speed", "occupancy"]].isnull().sum())
+
+
+def flag_statistical_outliers_grouped(
+    t: pd.DataFrame, cols: list[str], group_col: str = "congestion_level"
+) -> pd.DataFrame:
+    """
+    Add a boolean *_outlier column per numeric column, using IQR bounds
+    computed SEPARATELY within each group_col category (default:
+    congestion_level).
+
+    Global IQR is the wrong tool for a naturally multi-modal variable
+    like avg_speed — a legitimately low speed during Severe congestion
+    looks like an "outlier" only when compared against free-flow
+    speeds too. Grouping first means we're asking "is this unusual for
+    THIS traffic condition", not "is this unusual overall".
+
+    NOTE: congestion_level is ~15% blank at this point in the pipeline
+    (it's derived later, in step 9). groupby(dropna=True) means those
+    blank rows are silently skipped here and left un-flagged. This is
+    an accepted, documented gap — those rows get evaluated again once
+    congestion_level exists for all rows.
+    """
+    for col in cols:
+        t[f"{col}_is_outlier"] = False  # default; filled in per group below
+
+        for group_value, group_df in t.groupby(group_col, dropna=True):
+            q1, q3 = group_df[col].quantile([0.25, 0.75])
+            iqr = q3 - q1
+            lower, upper = q1 - 1.5 * iqr, q3 + 1.5 * iqr
+
+            mask = (t[group_col] == group_value) & ((t[col] < lower) | (t[col] > upper))
+            t.loc[mask, f"{col}_is_outlier"] = True
+
+            logger.info(
+                f"{col} | {group_col}={group_value}: bounds [{lower:.1f}, {upper:.1f}], "
+                f"{mask.sum()} outliers flagged"
+            )
+
+        n_total = t[f"{col}_is_outlier"].sum()
+        logger.info(f"{col}: {n_total} total outliers flagged across all groups")
+
+    return t
+
+
+# to check the statistical outlier section
+
+
+if __name__ == "__main__":
+    from ingest import load_traffic
+
+    t = load_traffic("data/raw/traffic_sensor_log.csv")
+    t = deduplicate_traffic(t)
+    t = fix_impossible_values(t)
+    t = flag_statistical_outliers_grouped(t, ["traffic_volume", "avg_speed", "occupancy"])
+
+    # Check the distribution BEFORE deciding whether to null anything —
+    # this is the diagnostic that caught the global-IQR bias earlier.
+    flagged = t[t["avg_speed_is_outlier"]]
+    print("\navg_speed outliers by congestion_level (grouped IQR):")
+    print(flagged["congestion_level"].value_counts())
+
+    print("\nFinal shape:", t.shape)
