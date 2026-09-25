@@ -51,3 +51,15 @@ readings are altered or fabricated — and the flags remain available as
 potential model features (an "anomalous reading" signal may itself be
 predictive).
 
+
+
+### Imputation
+
+Missing values (~2.5% each for traffic_volume, avg_speed, occupancy —
+combining original sensor dropout and nulled impossible values) were
+filled using grouped median imputation: median value for the same
+road_id + hour + day_of_week combination, falling back to a global
+median for any group with no valid values. This preserves realistic
+time-of-day and road-specific traffic patterns instead of flattening
+gaps to a single corridor-wide average.
+
