@@ -74,3 +74,14 @@ target categories. Result: Clear 8,168 (75%) · Cloudy 2,202 (20%) ·
 Rain 426 (4%) · Fog 76 (0.7%) — total matches raw row count exactly,
 confirming no data loss.
 
+
+
+### Vehicle Type Distribution Parsing
+
+vehicle_type_dist (a JSON string per row, e.g. {"2W":0.37,"Car":0.43,...})
+was parsed into 4 separate numeric columns: pct_2w, pct_car, pct_lcv,
+pct_hcv. All 176,701 rows parsed successfully with zero failures.
+Row-wise sums range 0.99–1.01 (mean 0.9999, median 1.0), confirming
+valid distributions with only expected floating-point rounding.
+
+

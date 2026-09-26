@@ -233,3 +233,6 @@ if __name__ == "__main__":
     print(w["weather_condition_clean"].value_counts())
     print("\nParsed vehicle columns:")
     print(t[["pct_2w", "pct_car", "pct_lcv", "pct_hcv"]].describe())
+
+    row_sums = t[["pct_2w", "pct_car", "pct_lcv", "pct_hcv"]].sum(axis=1)
+    print(row_sums.describe())
