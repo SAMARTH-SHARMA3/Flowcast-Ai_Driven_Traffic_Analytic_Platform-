@@ -62,7 +62,7 @@ definitions):
 
 ## Project Structure
 
-![FlowCast project structure](docs/images/project_structure_tree.png)
+![FlowCast project structure](data/docs/images/project_structure_tree.png)
 
 
 
