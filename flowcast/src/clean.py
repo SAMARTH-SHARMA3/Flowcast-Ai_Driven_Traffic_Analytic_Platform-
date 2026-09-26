@@ -299,6 +299,27 @@ def derive_congestion_level(merged: pd.DataFrame) -> pd.DataFrame:
 
 
 
+def finalize_columns(merged: pd.DataFrame) -> pd.DataFrame:
+    """
+    Drop columns that are now redundant after cleaning/merging:
+    - station_id: duplicate of weather_station_id after the merge
+    - vehicle_type_dist: raw JSON string, superseded by the parsed
+      pct_2w/pct_car/pct_lcv/pct_hcv columns
+
+    Kept everything else, including intermediate columns like
+    hour/day_of_week/timestamp — these may be useful for feature
+    engineering (M3) even though they weren't in the original raw schema.
+    """
+    cols_to_drop = ["station_id", "vehicle_type_dist"]
+    existing_to_drop = [c for c in cols_to_drop if c in merged.columns]
+
+    merged = merged.drop(columns=existing_to_drop)
+    logger.info(f"Dropped redundant columns: {existing_to_drop}")
+
+    return merged
+
+
+
 
 
 """checking all the functions are working and printing their results"""
@@ -377,6 +398,7 @@ if __name__ == "__main__":
     # Only fills nulls — never overwrites an existing real label.
     # ============================================================
     merged = derive_congestion_level(merged)
+    merged = finalize_columns(merged)
     print("\n[Check] Final congestion_level distribution:")
     print(merged["congestion_level"].value_counts())
     print("[Check] Remaining congestion_level nulls (should be 0):",

@@ -108,5 +108,42 @@ Final class distribution: Free-flow 108,544 (61%) · Moderate 42,103 (24%)
 · Heavy 16,308 (9%) · Severe 9,746 (5.5%) — a meaningful class imbalance
 to account for during classification modeling (M4).
 
+### Saving the Processed Dataset
+
+The fully cleaned and merged table (176,701 rows) is saved to
+`data/processed/flowcast_clean.parquet`. Parquet was chosen over CSV
+to preserve exact dtypes (datetime, bool, float) and for faster reload
+in later pipeline stages.
+
+### Date Format Handling (clarification)
+
+Note: weather's DD/MM/YYYY vs. traffic/calendar's YYYY-MM-DD format
+difference was resolved at the **ingestion** stage (`ingest.py`), not
+in `clean.py` — each loader parses its table's dates into proper
+`datetime` objects using an explicit `format=` argument. By the time
+any cleaning or merging happens, all three tables' `date` columns are
+real datetime values with no format ambiguity. Verified by the merge
+step showing 0 unmatched calendar keys.
+
+### Schema Verification & Column Cleanup
+
+After saving, the processed file's schema was inspected (`src/utils.py`
+→ `print_schema()`) and compared against the PRD's raw schema. Most
+differences are new columns added deliberately during cleaning
+(outlier flags, parsed vehicle-type percentages, merged weather/
+calendar fields, timestamp helpers) — these are expected, not errors.
+
+Two genuinely redundant columns were dropped in a final
+`finalize_columns()` step, run just before saving:
+- `station_id` — exact duplicate of `weather_station_id` after the
+  weather merge
+- `vehicle_type_dist` — raw JSON string, superseded by the parsed
+  `pct_2w` / `pct_car` / `pct_lcv` / `pct_hcv` columns (no ML model
+  can consume a JSON string directly)
+
+All other derived columns (`hour`, `day_of_week`, `timestamp`,
+`weather_join_hour`, `*_is_outlier` flags) were kept — not part of the
+original raw schema, but useful inputs for feature engineering (M3).
+
 
 
