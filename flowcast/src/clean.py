@@ -204,35 +204,111 @@ def parse_vehicle_dist(t: pd.DataFrame) -> pd.DataFrame:
 
     return t
 
+
+def align_timestamps(t: pd.DataFrame, w: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Build matching join keys between traffic (30-min grain) and weather
+    (hourly grain). Each 30-min traffic window is floored to its
+    containing hour, so both the :00 and :30 windows in an hour map to
+    the same weather reading, per the data dictionary's rule.
+    """
+    # Traffic: build full timestamp, then floor to the hour for joining
+    t["timestamp"] = pd.to_datetime(t["date"].astype(str) + " " + t["time"])
+    t["weather_join_hour"] = t["timestamp"].dt.floor("h")
+
+    # Weather: build full timestamp (already hourly, so this IS the join key)
+    w["timestamp"] = pd.to_datetime(w["date"].astype(str) + " " + w["time"])
+    w["weather_join_hour"] = w["timestamp"]
+
+    logger.info(f"Traffic timestamp range: {t['timestamp'].min()} to {t['timestamp'].max()}")
+    logger.info(f"Weather timestamp range: {w['timestamp'].min()} to {w['timestamp'].max()}")
+
+    return t, w
+
+
+
+def merge_all(t: pd.DataFrame, w: pd.DataFrame, c: pd.DataFrame) -> pd.DataFrame:
+    """
+    Merge weather and calendar data onto the traffic grain.
+
+    Traffic stays the base table throughout — left joins only, so no
+    traffic row is ever lost or duplicated, regardless of whether a
+    matching weather/calendar row exists.
+    """
+    before = len(t)
+
+    # Weather: join on station + aligned hour
+    merged = t.merge(
+        w[["station_id", "weather_join_hour", "weather_condition_clean",
+           "temperature", "rainfall", "visibility"]],
+        left_on=["weather_station_id", "weather_join_hour"],
+        right_on=["station_id", "weather_join_hour"],
+        how="left",
+    )
+
+    # Calendar: join on date only
+    merged = merged.merge(
+        c[["date", "public_holiday", "holiday_name", "event_flag", "event_name", "roadwork_flag"]],
+        on="date",
+        how="left",
+    )
+
+    after = len(merged)
+    logger.info(f"Merge: {before} traffic rows -> {after} merged rows (should be equal)")
+
+    n_no_weather = merged["weather_condition_clean"].isnull().sum()
+    n_no_calendar = merged["public_holiday"].isnull().sum()
+    logger.info(f"Rows with no matching weather: {n_no_weather}")
+    logger.info(f"Rows with no matching calendar: {n_no_calendar}")
+
+    return merged
+
+
+
+
+
 """checking all the functions are working and printing their results"""
 
 
 if __name__ == "__main__":
-    from ingest import load_traffic,load_weather,load_calendar
+    from ingest import load_traffic, load_weather, load_calendar
 
+    # --- Load ---
     t = load_traffic("data/raw/traffic_sensor_log.csv")
+    w = load_weather("data/raw/weather_observations.csv")
+    cal = load_calendar("data/raw/calendar_events.csv")
+
+    # --- Clean traffic ---
     t = deduplicate_traffic(t)
     t = fix_impossible_values(t)
     t = flag_statistical_outliers_grouped(t, ["traffic_volume", "avg_speed", "occupancy"])
     t = impute_missing(t, ["traffic_volume", "avg_speed", "occupancy"])
-    w = load_weather("data/raw/weather_observations.csv")
-    w = harmonize_weather_labels(w)
     t = parse_vehicle_dist(t)
 
-    
-    flagged = t[t["avg_speed_is_outlier"]]
+    # --- Clean weather ---
+    w = harmonize_weather_labels(w)
+
+    # --- Align timestamps (needs both t and w) ---
+    t, w = align_timestamps(t, w)
+
+    # --- Merge everything ---
+    merged = merge_all(t, w, cal)
+    print("\nFinal merged shape:", merged.shape)
+
+    # --- Diagnostics (kept from earlier steps, for reference) ---
     print("\navg_speed outliers by congestion_level (grouped IQR):")
-    print(flagged["congestion_level"].value_counts())
+    print(t[t["avg_speed_is_outlier"]]["congestion_level"].value_counts())
 
-    print("\nFinal shape:", t.shape)
-    print(t[[c for c in t.columns if "_is_outlier" in c]].sum())
+    print("\nOutlier flag counts:")
+    print(t[[col for col in t.columns if "_is_outlier" in col]].sum())
+
+    print("\nRemaining nulls (should be 0):")
     print(t[["traffic_volume", "avg_speed", "occupancy"]].isnull().sum())
-    print("\nBefore:", sorted(w["weather_condition"].unique()))
-    print("After:", sorted(w["weather_condition_clean"].dropna().unique()))
-    print("\nFinal category counts:")
-    print(w["weather_condition_clean"].value_counts())
-    print("\nParsed vehicle columns:")
-    print(t[["pct_2w", "pct_car", "pct_lcv", "pct_hcv"]].describe())
 
-    row_sums = t[["pct_2w", "pct_car", "pct_lcv", "pct_hcv"]].sum(axis=1)
-    print(row_sums.describe())
+    print("\nWeather categories after harmonization:")
+    print(w["weather_condition_clean"].value_counts())
+
+    print("\nVehicle distribution row sums (should be ~1.0):")
+    print(t[["pct_2w", "pct_car", "pct_lcv", "pct_hcv"]].sum(axis=1).describe())
+
+    

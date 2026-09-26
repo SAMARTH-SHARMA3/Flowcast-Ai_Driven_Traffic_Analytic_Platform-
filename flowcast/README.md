@@ -85,3 +85,14 @@ Row-wise sums range 0.99–1.01 (mean 0.9999, median 1.0), confirming
 valid distributions with only expected floating-point rounding.
 
 
+### Merging
+
+Weather (joined on station_id + aligned hour) and calendar (joined on
+date) were left-merged onto the traffic table, which remains the base
+grain throughout. Result: 176,701 rows before and after merge (no row
+loss or duplication), with 0 unmatched weather keys and 0 unmatched
+calendar keys — confirming full key alignment across all three source
+tables.
+
+
+
