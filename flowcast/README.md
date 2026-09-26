@@ -218,35 +218,47 @@ later pipeline stages.
 ## Roadmap
 - **M3 — Feature Engineering:** 
 
-### Cyclical Time Encodings
-`hour` and `day_of_week` were encoded as sine/cosine pairs rather than
-raw integers, so models correctly treat time as circular (23:00 is
-close to 00:00, Sunday is close to Monday) instead of as a flat scale
-where those boundaries would appear maximally far apart. Also added
-`is_rush_hour` (weekday mornings 7-9am / evenings 5-7pm).
-Verified: hour=23 and hour=0 produce near-identical (sin, cos) pairs,
-confirming correct wraparound. is_rush_hour flags 21,080 rows (11.9%),
-consistent with the expected proportion of weekday rush-hour windows.
 
-### Lag Features
-Added traffic_volume_lag_1/2/4/48 (30min/1h/2h/24h ago), computed per
-road_id after sorting by road_id + timestamp, using groupby().shift()
-to guarantee no value crosses between different roads' time series.
-Verified by inspecting one road's sequence directly: each lag value
-exactly matches the corresponding earlier reading for that same road;
-the first N rows of each road's series correctly show NaN (no prior
-data to look back to yet).
+Built per PRD Section 10.1's concept-to-application map. All lag and
+rolling features are computed within each road segment in strict time
+order (sorted by road_id + timestamp, grouped by road_id), with
+rolling windows shifted before aggregation — this guarantees no
+feature uses information from a future window relative to the
+prediction time (verified by hand on real data at each step; see
+commit history).
 
+**Temporal:** hour/day_of_week cyclical (sin/cos) encodings, so models
+treat time as circular rather than a flat scale. Plus `is_weekend` and
+`is_rush_hour` (weekday 7-9am/5-7pm) flags.
 
-### Rolling Window Features
-Added rolling mean/std of traffic_volume over 2h/4h windows (4/8
-steps), computed per road_id. Critically, values are shift(1)'d before
-rolling — this excludes each row's own value from its own window,
-preventing the model from "seeing" the value it's meant to predict.
-Verified by hand: row 02:00's rolling_mean_4 (96.50) exactly matches
-the average of the 4 prior readings (119,91,94,82), correctly
-excluding that row's own value (116).
+**Lag features:** traffic_volume and avg_speed at t-1 (30min), t-2
+(1h), t-48 (same window, previous day) — per road segment.
 
+**Rolling statistics:** rolling mean/std of traffic_volume and
+avg_speed over the previous 4 and 8 windows (2h/4h) — shifted to
+exclude each row's own value from its own window.
+
+**Capacity:** volume-to-capacity ratio (v_c_ratio) and
+capacity_headroom (remaining capacity before saturation).
+
+**Weather:** rain_flag, low_visibility_flag (<1000m, standard
+meteorological fog threshold, confirmed against this dataset's actual
+301-10,000m range), and temperature_band (Cold/Mild/Hot, based on this
+dataset's actual 5.8-29.8°C range).
+
+**Calendar interactions:** holiday_peak_interaction (public_holiday ×
+is_rush_hour — captures that a holiday rush hour behaves differently
+from a normal one) and days_to_event (distance in days to the nearest
+event; 0 on the event day itself, verified against a real event date).
+
+**Categorical encoding:** weather_condition_clean and temperature_band
+one-hot encoded (cheap, no false ordering); road_id label-encoded
+(single integer column, avoids 25 mostly-zero one-hot columns —
+appropriate since M4/M5 will use tree-based models that don't assume
+numeric ordering between categories).
+
+**Output:** 176,701 rows, 71 columns, saved to
+`data/processed/flowcast_features.parquet`.
 
 
 
