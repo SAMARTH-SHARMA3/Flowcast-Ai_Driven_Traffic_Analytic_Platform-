@@ -68,6 +68,34 @@ def add_lag_features(t: pd.DataFrame, lags: list[int] = [1, 2, 4, 48]) -> pd.Dat
 
 
 
+def add_rolling_features(t: pd.DataFrame, windows: list[int] = [4, 8]) -> pd.DataFrame:
+    """
+    Add rolling mean/std of traffic_volume over past windows, PER ROAD.
+
+    windows are in 30-min steps: 4 = 2 hours, 8 = 4 hours.
+
+    CRITICAL: shift(1) happens BEFORE rolling() — this excludes the
+    current row from its own rolling window. Without the shift, the
+    window would include the very value we're trying to predict,
+    which is leakage just as serious as the cross-road bug in lags.
+    """
+    t = t.sort_values(["road_id", "timestamp"]).reset_index(drop=True)
+
+    for window in windows:
+        mean_col = f"traffic_volume_rolling_mean_{window}"
+        std_col = f"traffic_volume_rolling_std_{window}"
+
+        shifted = t.groupby("road_id")["traffic_volume"].shift(1)
+        t[mean_col] = shifted.groupby(t["road_id"]).rolling(window).mean().reset_index(drop=True)
+        t[std_col] = shifted.groupby(t["road_id"]).rolling(window).std().reset_index(drop=True)
+
+        logger.info(f"{mean_col}/{std_col}: {t[mean_col].isnull().sum()} nulls "
+                    f"(expected at each road's series start)")
+
+    return t
+
+
+
 # validating the result from above funcitons
 
 
@@ -75,12 +103,21 @@ if __name__ == "__main__":
     t = pd.read_parquet("data/processed/flowcast_clean.parquet")
     t = add_time_features(t)
     t = add_lag_features(t)
+    t = add_rolling_features(t)
 
     print("Shape:", t.shape)
     print(t[["hour", "hour_sin", "hour_cos", "day_of_week", "dow_sin", "dow_cos", "is_rush_hour"]].head(10))
 
-    print("new section")
-
     print("\nSample lag values for one road:")
     sample = t[t["road_id"] == "NL-007"][["road_id", "timestamp", "traffic_volume", "traffic_volume_lag_1", "traffic_volume_lag_2"]].head(10)
+    print(sample)
+
+
+    print("new section")
+
+
+    print("\nSample rolling values for one road:")
+    sample = t[t["road_id"] == "NL-007"][
+        ["timestamp", "traffic_volume", "traffic_volume_rolling_mean_4", "traffic_volume_rolling_std_4"]
+    ].head(10)
     print(sample)

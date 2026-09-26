@@ -238,6 +238,19 @@ the first N rows of each road's series correctly show NaN (no prior
 data to look back to yet).
 
 
+### Rolling Window Features
+Added rolling mean/std of traffic_volume over 2h/4h windows (4/8
+steps), computed per road_id. Critically, values are shift(1)'d before
+rolling — this excludes each row's own value from its own window,
+preventing the model from "seeing" the value it's meant to predict.
+Verified by hand: row 02:00's rolling_mean_4 (96.50) exactly matches
+the average of the 4 prior readings (119,91,94,82), correctly
+excluding that row's own value (116).
+
+
+
+
+
 
 
 
