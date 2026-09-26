@@ -43,12 +43,44 @@ def add_time_features(t: pd.DataFrame) -> pd.DataFrame:
     return t
 
 
+def add_lag_features(t: pd.DataFrame, lags: list[int] = [1, 2, 4, 48]) -> pd.DataFrame:
+    """
+    Add lagged traffic_volume features: value from N steps ago, PER ROAD.
+
+    lags are in units of 30-min steps: 1 = 30 min ago, 2 = 1 hour ago,
+    4 = 2 hours ago, 48 = same time yesterday (24h / 0.5h = 48 steps).
+
+    CRITICAL: must sort by road_id + timestamp first, then group by
+    road_id before shifting. Without this, .shift() can pull a value
+    from a completely different road's current reading and mislabel
+    it as "this road's past" — a serious, silent data leakage bug.
+    """
+    t = t.sort_values(["road_id", "timestamp"]).reset_index(drop=True)
+
+    for lag in lags:
+        col_name = f"traffic_volume_lag_{lag}"
+        t[col_name] = t.groupby("road_id")["traffic_volume"].shift(lag)
+        n_null = t[col_name].isnull().sum()
+        logger.info(f"{col_name}: {n_null} nulls (expected at each road's series start, "
+                    f"where there's no earlier data to look back to)")
+
+    return t
+
+
+
 # validating the result from above funcitons
 
 
 if __name__ == "__main__":
     t = pd.read_parquet("data/processed/flowcast_clean.parquet")
     t = add_time_features(t)
+    t = add_lag_features(t)
 
     print("Shape:", t.shape)
     print(t[["hour", "hour_sin", "hour_cos", "day_of_week", "dow_sin", "dow_cos", "is_rush_hour"]].head(10))
+
+    print("new section")
+
+    print("\nSample lag values for one road:")
+    sample = t[t["road_id"] == "NL-007"][["road_id", "timestamp", "traffic_volume", "traffic_volume_lag_1", "traffic_volume_lag_2"]].head(10)
+    print(sample)

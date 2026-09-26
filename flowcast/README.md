@@ -216,8 +216,36 @@ later pipeline stages.
 ---
 
 ## Roadmap
-- **M3 — Feature Engineering:** lag features, rolling averages, cyclical
-  time encodings
+- **M3 — Feature Engineering:** 
+
+### Cyclical Time Encodings
+`hour` and `day_of_week` were encoded as sine/cosine pairs rather than
+raw integers, so models correctly treat time as circular (23:00 is
+close to 00:00, Sunday is close to Monday) instead of as a flat scale
+where those boundaries would appear maximally far apart. Also added
+`is_rush_hour` (weekday mornings 7-9am / evenings 5-7pm).
+Verified: hour=23 and hour=0 produce near-identical (sin, cos) pairs,
+confirming correct wraparound. is_rush_hour flags 21,080 rows (11.9%),
+consistent with the expected proportion of weekday rush-hour windows.
+
+### Lag Features
+Added traffic_volume_lag_1/2/4/48 (30min/1h/2h/24h ago), computed per
+road_id after sorting by road_id + timestamp, using groupby().shift()
+to guarantee no value crosses between different roads' time series.
+Verified by inspecting one road's sequence directly: each lag value
+exactly matches the corresponding earlier reading for that same road;
+the first N rows of each road's series correctly show NaN (no prior
+data to look back to yet).
+
+
+
+
+
+
+
+
+
+
 - **M4 — Classical ML:** regression (traffic_volume), classification
   (congestion_level) across 5 model types, with time-series cross-validation
 - **M5 — Deep Learning:** LSTM/GRU sequence models, benchmarked against
