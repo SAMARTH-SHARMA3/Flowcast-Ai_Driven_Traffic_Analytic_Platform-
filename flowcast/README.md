@@ -96,3 +96,17 @@ tables.
 
 
 
+### Deriving Congestion Level
+
+The ~15% blank congestion_level values were filled using the volume/
+capacity ratio formula from the data dictionary (V/C = traffic_volume /
+(road_capacity/2), banded into Free-flow/Moderate/Heavy/Severe).
+Existing real labels were never overwritten — only null values were
+filled. Filled 26,624 values, leaving 0 missing.
+
+Final class distribution: Free-flow 108,544 (61%) · Moderate 42,103 (24%)
+· Heavy 16,308 (9%) · Severe 9,746 (5.5%) — a meaningful class imbalance
+to account for during classification modeling (M4).
+
+
+

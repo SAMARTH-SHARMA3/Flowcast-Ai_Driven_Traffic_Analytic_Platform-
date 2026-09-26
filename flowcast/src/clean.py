@@ -264,6 +264,40 @@ def merge_all(t: pd.DataFrame, w: pd.DataFrame, c: pd.DataFrame) -> pd.DataFrame
     return merged
 
 
+def derive_congestion_level(merged: pd.DataFrame) -> pd.DataFrame:
+    """
+    Fill blank congestion_level values using the volume/capacity ratio
+    formula from the data dictionary. Only fills where currently null —
+    never overwrites an existing real label, even if the derivation
+    would disagree with it (the original label is ground truth where
+    it exists; derivation is only a fallback for the ~15% gap).
+    """
+    n_before = merged["congestion_level"].isnull().sum()
+
+    half_capacity = merged["road_capacity"] / 2
+    v_c_ratio = merged["traffic_volume"] / half_capacity
+
+    def band(ratio):
+        if ratio < 0.50:
+            return "Free-flow"
+        elif ratio < 0.80:
+            return "Moderate"
+        elif ratio < 1.00:
+            return "Heavy"
+        else:
+            return "Severe"
+
+    derived = v_c_ratio.apply(band)
+
+    mask = merged["congestion_level"].isnull()
+    merged.loc[mask, "congestion_level"] = derived[mask]
+
+    n_after = merged["congestion_level"].isnull().sum()
+    logger.info(f"Derived congestion_level: filled {n_before - n_after} values ({n_before} -> {n_after} missing)")
+
+    return merged
+
+
 
 
 
@@ -271,44 +305,92 @@ def merge_all(t: pd.DataFrame, w: pd.DataFrame, c: pd.DataFrame) -> pd.DataFrame
 
 
 if __name__ == "__main__":
+    import os
     from ingest import load_traffic, load_weather, load_calendar
 
-    # --- Load ---
+    # ============================================================
+    # STEP 0: Load raw tables (validated already by ingest.py)
+    # ============================================================
     t = load_traffic("data/raw/traffic_sensor_log.csv")
     w = load_weather("data/raw/weather_observations.csv")
     cal = load_calendar("data/raw/calendar_events.csv")
 
-    # --- Clean traffic ---
+    # ============================================================
+    # STEPS 1-2: Deduplicate, then null out impossible values
+    # Order matters: dedup first so later stats aren't skewed by
+    # retry rows; impossible values -> NaN so imputation can treat
+    # them the same as genuine missingness.
+    # ============================================================
     t = deduplicate_traffic(t)
     t = fix_impossible_values(t)
+
+    # ============================================================
+    # STEP 3: Flag statistical outliers (grouped IQR, flag-only)
+    # Decision: flag but don't null — grouped IQR showed most
+    # "outliers" are real traffic conditions (e.g. Severe congestion),
+    # not sensor errors. See README for full reasoning.
+    # ============================================================
     t = flag_statistical_outliers_grouped(t, ["traffic_volume", "avg_speed", "occupancy"])
-    t = impute_missing(t, ["traffic_volume", "avg_speed", "occupancy"])
-    t = parse_vehicle_dist(t)
-
-    # --- Clean weather ---
-    w = harmonize_weather_labels(w)
-
-    # --- Align timestamps (needs both t and w) ---
-    t, w = align_timestamps(t, w)
-
-    # --- Merge everything ---
-    merged = merge_all(t, w, cal)
-    print("\nFinal merged shape:", merged.shape)
-
-    # --- Diagnostics (kept from earlier steps, for reference) ---
-    print("\navg_speed outliers by congestion_level (grouped IQR):")
+    print("\n[Check] avg_speed outliers by congestion_level:")
     print(t[t["avg_speed_is_outlier"]]["congestion_level"].value_counts())
-
-    print("\nOutlier flag counts:")
+    print("\n[Check] Total outlier flags per column:")
     print(t[[col for col in t.columns if "_is_outlier" in col]].sum())
 
-    print("\nRemaining nulls (should be 0):")
+    # ============================================================
+    # STEP 4: Impute missing values (grouped median: road+hour+day)
+    # Only fills genuine NaN — outlier-flagged values were never
+    # nulled, so they're untouched here.
+    # ============================================================
+    t = impute_missing(t, ["traffic_volume", "avg_speed", "occupancy"])
+    print("\n[Check] Remaining nulls after imputation (should be 0):")
     print(t[["traffic_volume", "avg_speed", "occupancy"]].isnull().sum())
 
-    print("\nWeather categories after harmonization:")
+    # ============================================================
+    # STEP 5: Harmonize weather_condition labels (13 -> 4 categories)
+    # ============================================================
+    w = harmonize_weather_labels(w)
+    print("\n[Check] Weather categories after harmonization:")
     print(w["weather_condition_clean"].value_counts())
 
-    print("\nVehicle distribution row sums (should be ~1.0):")
+    # ============================================================
+    # STEP 6: Parse vehicle_type_dist JSON into 4 numeric columns
+    # ============================================================
+    t = parse_vehicle_dist(t)
+    print("\n[Check] Vehicle distribution row sums (should be ~1.0):")
     print(t[["pct_2w", "pct_car", "pct_lcv", "pct_hcv"]].sum(axis=1).describe())
+
+    # ============================================================
+    # STEP 7: Align timestamps (traffic 30-min grain <-> weather hourly)
+    # Both :00 and :30 windows in an hour map to the same weather key.
+    # ============================================================
+    t, w = align_timestamps(t, w)
+
+    # ============================================================
+    # STEP 8: Merge weather + calendar onto the traffic grain
+    # Left joins only — traffic row count must stay unchanged.
+    # ============================================================
+    merged = merge_all(t, w, cal)
+    print("\n[Check] Final merged shape:", merged.shape)
+
+    # ============================================================
+    # STEP 9: Derive blank congestion_level (V/C ratio formula)
+    # Only fills nulls — never overwrites an existing real label.
+    # ============================================================
+    merged = derive_congestion_level(merged)
+    print("\n[Check] Final congestion_level distribution:")
+    print(merged["congestion_level"].value_counts())
+    print("[Check] Remaining congestion_level nulls (should be 0):",
+          merged["congestion_level"].isnull().sum())
+
+    # ============================================================
+    # SAVE: write the final analysis-ready table for M3+ to consume
+    # ============================================================
+    os.makedirs("data/processed", exist_ok=True)  # create folder if it doesn't exist yet
+    output_path = "data/processed/flowcast_clean.parquet"
+    merged.to_parquet(output_path, index=False)
+    logger.info(f"Saved processed dataset: {merged.shape} -> {output_path}")
+
+    print("\n[Check] Final columns in saved dataset:")
+    print(merged.columns.tolist())
 
     
