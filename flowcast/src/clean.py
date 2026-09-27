@@ -227,6 +227,45 @@ def align_timestamps(t: pd.DataFrame, w: pd.DataFrame) -> tuple[pd.DataFrame, pd
 
 
 
+def impute_weather(w: pd.DataFrame) -> pd.DataFrame:
+    """
+    Impute missing temperature/visibility using time-based interpolation,
+    per station, per PRD Section 9.1 ("impute short sensor gaps by time
+    interpolation"). Weather varies smoothly hour-to-hour, unlike traffic
+    volume's strong time-of-day pattern — interpolation is the more
+    appropriate method here than grouped-median.
+
+    Falls back to per-station median for any values interpolation can't
+    reach (e.g. missing values at the very start of a station's series,
+    with no earlier point to interpolate from).
+    """
+    w = w.sort_values(["station_id", "timestamp"]).reset_index(drop=True)
+
+    for col in ["temperature", "visibility"]:
+        n_before = w[col].isnull().sum()
+
+        # Time-based interpolation, per station — never let one station's
+        # gap get filled using another station's readings.
+        w[col] = w.groupby("station_id")[col].transform(
+            lambda s: s.interpolate(method="linear", limit_direction="both")
+        )
+
+        # Fallback: any station with NO valid values to interpolate at all
+        # (unlikely, but the code should handle it rather than silently
+        # leaving a NaN) gets its per-station median... and if THAT'S also
+        # unavailable, the global median.
+        station_median = w.groupby("station_id")[col].transform("median")
+        w[col] = w[col].fillna(station_median)
+        w[col] = w[col].fillna(w[col].median())
+
+        n_after = w[col].isnull().sum()
+        logger.info(f"{col}: imputed {n_before - n_after} values (time interpolation, per station)")
+
+    return w
+    
+
+
+
 def merge_all(t: pd.DataFrame, w: pd.DataFrame, c: pd.DataFrame) -> pd.DataFrame:
     """
     Merge weather and calendar data onto the traffic grain.
@@ -296,6 +335,9 @@ def derive_congestion_level(merged: pd.DataFrame) -> pd.DataFrame:
     logger.info(f"Derived congestion_level: filled {n_before - n_after} values ({n_before} -> {n_after} missing)")
 
     return merged
+
+
+
 
 
 
@@ -370,6 +412,7 @@ if __name__ == "__main__":
     # STEP 5: Harmonize weather_condition labels (13 -> 4 categories)
     # ============================================================
     w = harmonize_weather_labels(w)
+    w = impute_weather(w)
     print("\n[Check] Weather categories after harmonization:")
     print(w["weather_condition_clean"].value_counts())
 
