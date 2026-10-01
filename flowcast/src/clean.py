@@ -239,21 +239,18 @@ def impute_weather(w: pd.DataFrame) -> pd.DataFrame:
     reach (e.g. missing values at the very start of a station's series,
     with no earlier point to interpolate from).
     """
-    w = w.sort_values(["station_id", "timestamp"]).reset_index(drop=True)
+    # Build a local sort key — don't depend on align_timestamps() having
+    # already run, since this function may run before it in the pipeline.
+    sort_key = pd.to_datetime(w["date"].astype(str) + " " + w["time"])
+    w = w.assign(_sort_ts=sort_key).sort_values(["station_id", "_sort_ts"]).drop(columns="_sort_ts").reset_index(drop=True)
 
     for col in ["temperature", "visibility"]:
         n_before = w[col].isnull().sum()
 
-        # Time-based interpolation, per station — never let one station's
-        # gap get filled using another station's readings.
         w[col] = w.groupby("station_id")[col].transform(
             lambda s: s.interpolate(method="linear", limit_direction="both")
         )
 
-        # Fallback: any station with NO valid values to interpolate at all
-        # (unlikely, but the code should handle it rather than silently
-        # leaving a NaN) gets its per-station median... and if THAT'S also
-        # unavailable, the global median.
         station_median = w.groupby("station_id")[col].transform("median")
         w[col] = w[col].fillna(station_median)
         w[col] = w[col].fillna(w[col].median())
