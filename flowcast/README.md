@@ -262,6 +262,20 @@ numeric ordering between categories).
 
 
 
+### Post-Hoc Fix: Weather Imputation Gap
+
+During M4's formal validation step, it was discovered that temperature
+(2,708 nulls) and visibility (1,806 nulls) had never been imputed — M2
+originally only built imputation for traffic_volume/avg_speed/occupancy.
+These gaps were small in the raw weather file (167/111 out of 10,872
+rows) but multiplied across the merge (each weather reading maps to
+multiple traffic rows). Fixed via time-based interpolation per weather
+station (more appropriate than grouped-median, since weather varies
+smoothly hour-to-hour rather than following traffic's strong
+time-of-day pattern). Full pipeline re-run and re-verified: 0 nulls
+remain in temperature/visibility, confirmed by validate_final_dataset().
+
+
 
 
 
