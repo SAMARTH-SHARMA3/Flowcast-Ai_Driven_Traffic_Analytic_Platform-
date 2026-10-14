@@ -321,3 +321,16 @@ Verified by hand: target_volume_next on row N exactly matches
 traffic_volume on row N+1 for the same road; the last row of each
 road's series correctly shows NaN (25 nulls per target = 1 per road,
 expected — these rows are dropped before training).
+
+
+
+### Time-Based Split
+Per PRD 11.3, split chronologically (never randomly) to respect
+temporal ordering and avoid leaking future information into training:
+Train 70% (2025-01-01 to 2025-04-16, 123,691 rows), Validation 15%
+(2025-04-16 to 2025-05-09, 26,483 rows), Test 15% (2025-05-09 to
+2025-05-31, 26,502 rows). The 25 rows with no next-window target
+(each road's final timestamp) were dropped before splitting.
+
+
+

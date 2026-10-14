@@ -60,6 +60,51 @@ def add_forecast_targets(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+
+
+def time_based_split(
+    df: pd.DataFrame,
+    train_frac: float = 0.70,
+    val_frac: float = 0.15,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """
+    Split chronologically into train / validation / test, per PRD 11.3:
+    "earliest windows for training, latest for testing — never randomly."
+
+    train_frac=0.70, val_frac=0.15 leaves 0.15 for test (5 months of
+    data: ~3.5 months train, ~3 weeks val, ~3 weeks test).
+
+    CRITICAL: this splits by TIME, not by row count per road — every
+    road contributes to all three sets, but the actual calendar cutoff
+    dates are shared across all roads. This matters because the model
+    must be evaluated on "the future, corridor-wide," not on a
+    road-by-road shuffle.
+    """
+    df = df.sort_values("timestamp").reset_index(drop=True)
+
+    unique_timestamps = df["timestamp"].sort_values().unique()
+    n = len(unique_timestamps)
+
+    train_cutoff = unique_timestamps[int(n * train_frac)]
+    val_cutoff = unique_timestamps[int(n * (train_frac + val_frac))]
+
+    train = df[df["timestamp"] < train_cutoff]
+    val = df[(df["timestamp"] >= train_cutoff) & (df["timestamp"] < val_cutoff)]
+    test = df[df["timestamp"] >= val_cutoff]
+
+    logger.info(f"Train: {len(train)} rows, {train['timestamp'].min()} to {train['timestamp'].max()}")
+    logger.info(f"Val:   {len(val)} rows, {val['timestamp'].min()} to {val['timestamp'].max()}")
+    logger.info(f"Test:  {len(test)} rows, {test['timestamp'].min()} to {test['timestamp'].max()}")
+
+    # Sanity assertion: no overlap, no gaps, chronological order preserved
+    assert train["timestamp"].max() < val["timestamp"].min(), "Train/val overlap detected!"
+    assert val["timestamp"].max() < test["timestamp"].min(), "Val/test overlap detected!"
+
+    return train, val, test
+
+
+
+
 if __name__ == "__main__":
     df = pd.read_parquet("data/processed/flowcast_features.parquet")
     logger.info(f"Loaded flowcast_features.parquet: {df.shape}")
@@ -85,3 +130,21 @@ if __name__ == "__main__":
     print("\nNull counts per target:")
     for col in ["target_volume_next", "target_travel_time_next", "target_congestion_next", "target_accident_next"]:
         print(f"  {col}: {df[col].isnull().sum()}")
+
+
+
+
+    print("new Section")
+
+    # Drop rows with no forecasting target (each road's last row — can't
+    # evaluate a prediction with no ground truth to compare against)
+    df_modeling = df.dropna(subset=["target_volume_next", "target_congestion_next"])
+    logger.info(f"Dropped {len(df) - len(df_modeling)} rows with no next-window target "
+                f"(expected: 25, one per road)")
+
+    train, val, test = time_based_split(df_modeling)
+
+    print("\nSplit sizes:")
+    print(f"  Train: {len(train)} ({len(train)/len(df_modeling)*100:.1f}%)")
+    print(f"  Val:   {len(val)} ({len(val)/len(df_modeling)*100:.1f}%)")
+    print(f"  Test:  {len(test)} ({len(test)/len(df_modeling)*100:.1f}%)")
