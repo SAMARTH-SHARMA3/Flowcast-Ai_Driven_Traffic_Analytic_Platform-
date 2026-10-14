@@ -215,6 +215,35 @@ def add_categorical_features(t: pd.DataFrame) -> pd.DataFrame:
     return t
 
 
+def add_categorical_features(t: pd.DataFrame) -> pd.DataFrame:
+    """
+    Encode categorical columns into numeric form for modeling.
+
+    - weather_condition_clean (4 categories), temperature_band (3
+      categories), congestion_level (4 categories): one-hot encoded —
+      cheap, avoids implying false order.
+    - road_id (25 categories): label-encoded (single integer column).
+
+    Original string columns are KEPT for readability; drop later only
+    if a specific model requires purely numeric input.
+    """
+    weather_dummies = pd.get_dummies(t["weather_condition_clean"], prefix="weather")
+    temp_band_dummies = pd.get_dummies(t["temperature_band"], prefix="temp")
+    congestion_dummies = pd.get_dummies(t["congestion_level"], prefix="congestion")  # NEW
+    t = pd.concat([t, weather_dummies, temp_band_dummies, congestion_dummies], axis=1)
+    logger.info(
+        f"One-hot encoded: {list(weather_dummies.columns)}, "
+        f"{list(temp_band_dummies.columns)}, {list(congestion_dummies.columns)}"
+    )
+
+    unique_roads = sorted(t["road_id"].unique())
+    road_map = {road: i for i, road in enumerate(unique_roads)}
+    t["road_id_encoded"] = t["road_id"].map(road_map)
+    logger.info(f"Label encoded road_id: {len(unique_roads)} unique roads mapped to 0-{len(unique_roads)-1}")
+
+    return t
+
+
 if __name__ == "__main__":
     import os
 

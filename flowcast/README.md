@@ -277,6 +277,19 @@ remain in temperature/visibility, confirmed by validate_final_dataset().
 
 
 
+### Post-Hoc Fix: congestion_level Not One-Hot Encoded
+
+Discovered while defining M5's feature sets: congestion_level (current
+window) had never been one-hot encoded in M3, despite weather_condition
+and temperature_band both being handled. Fixed by adding
+congestion_Free-flow/Heavy/Moderate/Severe to add_categorical_features().
+This is NOT a leakage risk when used as a feature for target_congestion_next
+(forecasting next window's congestion from the CURRENT window's congestion
+is legitimate, unlike v_c_ratio/capacity_headroom, which are mathematically
+derived from the current traffic_volume itself). Shape: 71 → 75 columns.
+
+
+
 
 
 

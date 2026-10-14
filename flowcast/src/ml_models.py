@@ -105,6 +105,32 @@ def time_based_split(
 
 
 
+def get_feature_columns(df: pd.DataFrame, target: str) -> list[str]:
+    """
+    Return the list of valid feature columns for a given target,
+    excluding IDs/strings, all 4 target columns, and (for
+    target_volume_next specifically) the near-duplicate columns
+    flagged in M4 Section 5.2 (v_c_ratio, capacity_headroom,
+    vehicle_count — algebraic restatements of CURRENT traffic_volume).
+    """
+    always_exclude = {
+        "road_id", "road_name", "weather_station_id", "date", "time",
+        "timestamp", "weather_join_hour", "weather_condition_clean",
+        "temperature_band", "holiday_name", "event_name",
+        "target_volume_next", "target_travel_time_next",
+        "target_congestion_next", "target_accident_next",
+    }
+
+    exclude = set(always_exclude)
+    if target == "target_volume_next":
+        exclude |= {"v_c_ratio", "capacity_headroom", "vehicle_count"}
+
+    feature_cols = [c for c in df.columns if c not in exclude and c != "congestion_level"]
+    return feature_cols
+
+
+
+
 if __name__ == "__main__":
     df = pd.read_parquet("data/processed/flowcast_features.parquet")
     logger.info(f"Loaded flowcast_features.parquet: {df.shape}")
@@ -134,7 +160,7 @@ if __name__ == "__main__":
 
 
 
-    print("new Section")
+    
 
     # Drop rows with no forecasting target (each road's last row — can't
     # evaluate a prediction with no ground truth to compare against)
@@ -148,3 +174,14 @@ if __name__ == "__main__":
     print(f"  Train: {len(train)} ({len(train)/len(df_modeling)*100:.1f}%)")
     print(f"  Val:   {len(val)} ({len(val)/len(df_modeling)*100:.1f}%)")
     print(f"  Test:  {len(test)} ({len(test)/len(df_modeling)*100:.1f}%)")
+
+
+    print("new Section")
+
+    volume_features = get_feature_columns(df_modeling, "target_volume_next")
+    congestion_features = get_feature_columns(df_modeling, "target_congestion_next")
+    
+    print(f"\nFeature count for volume target: {len(volume_features)}")
+    print(f"Feature count for congestion target: {len(congestion_features)}")
+    print(f"\nDifference (volume-specific exclusions): "
+              f"{set(congestion_features) - set(volume_features)}")
