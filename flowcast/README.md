@@ -281,12 +281,43 @@ remain in temperature/visibility, confirmed by validate_final_dataset().
 
 
 
+## M4 — EDA & Reporting
+
+Exploratory analysis of the feature-engineered dataset, covering all 5
+PRD-required mathematical concepts (descriptive statistics, spread,
+correlation, covariance/multicollinearity, normality) — full analysis
+in `notebooks/02_eda.ipynb`.
+
+Key findings: identified target-leakage risks (`v_c_ratio`,
+`capacity_headroom`, `vehicle_count` must be excluded when
+`traffic_volume` is the regression target), severe multicollinearity
+among lag/rolling features (relevant for linear models in M5),
+confirmed class imbalance on both classification targets
+(`congestion_level`, `accident_count`), and retroactively validated
+M2's choice of grouped IQR over z-score for outlier detection (the
+underlying data is not normally distributed).
+
+EDA also surfaced and fixed a real gap: `temperature`/`visibility`
+had never been imputed (see `reports/data_quality.md` Section 3) —
+caught by M4's formal validation step, not earlier manual checks.
+
+**Full report:** [`reports/data_quality.md`](reports/data_quality.md)
+— defect log, resolution methods, EDA findings, validated guarantees,
+and known limitations, consolidated across M1–M4.
 
 
 
 
-- **M4 — Classical ML:** regression (traffic_volume), classification
-  (congestion_level) across 5 model types, with time-series cross-validation
-- **M5 — Deep Learning:** LSTM/GRU sequence models, benchmarked against
-  classical ML
-- **M6 — Dashboard:** Streamlit app for live predictions and visualization
+## M5 — Classical ML Engine
+
+### Forecasting Target Construction
+Per PRD 11.1, all 4 targets are FORWARD-LOOKING ("next window"), not
+same-window estimations — this is genuine forecasting. Built via
+shift(-1) grouped by road_id (mirroring M3's backward shift() for lag
+features). accident_count was first binarized (accident_flag: 0 vs
+1+, per M4's class-imbalance finding) before shifting.
+
+Verified by hand: target_volume_next on row N exactly matches
+traffic_volume on row N+1 for the same road; the last row of each
+road's series correctly shows NaN (25 nulls per target = 1 per road,
+expected — these rows are dropped before training).
