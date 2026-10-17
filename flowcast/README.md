@@ -387,3 +387,16 @@ same optimization problem via a different method.
 
 
 
+### Decision Tree — Feature Importance Investigation
+
+The tuned tree (max_depth=10) showed traffic_volume at 90.4% feature
+importance — investigated rather than accepted at face value. Retraining
+without traffic_volume caused only a marginal MAPE increase (11.50% →
+11.74%, R² 0.9378 → 0.9371), confirming this is REDUNDANCY, not
+fragility: the removed signal is substitutable via other multicollinear
+features (congestion_Free-flow 59.9% importance, occupancy 8.5%,
+road_capacity 9.0% — consistent with M4's VIF findings). The model is
+robust to losing its top feature, not dependent on it.
+
+
+

@@ -17,6 +17,8 @@ import pandas as pd
 import numpy as np
 import logging
 
+
+from sklearn.tree import DecisionTreeRegressor
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import (
@@ -275,6 +277,28 @@ class LinearRegressionScratch:
         return X @ self.weights + self.bias
 
 
+
+
+def check_overfitting(model, X_train, y_train, X_test, y_test, label: str = "") -> None:
+    """
+    Compare train vs. test performance — a large gap (train much
+    better than test) is the signature of overfitting, especially
+    important to check for Decision Trees, which can perfectly
+    memorize training data if left unconstrained (unlimited depth).
+    """
+    y_pred_train = model.predict(X_train)
+    y_pred_test = model.predict(X_test)
+
+    print(f"\n--- {label}: Train vs. Test ---")
+    train_metrics = regression_metrics(y_train, y_pred_train, label="Train")
+    test_metrics = regression_metrics(y_test, y_pred_test, label="Test")
+
+    gap = train_metrics["rmse"] - test_metrics["rmse"]
+    print(f"RMSE gap (train - test): {gap:.2f} "
+          f"({'overfitting concern' if test_metrics['rmse'] > train_metrics['rmse'] * 1.3 else 'reasonable'})")
+
+
+
 # ============================================================
 # MAIN: run the pipeline built so far
 # ============================================================
@@ -379,3 +403,84 @@ if __name__ == "__main__":
 
     y_pred_scratch = lr_scratch.predict(X_test)
     metrics_scratch = regression_metrics(y_test, y_pred_scratch, label="Test (from-scratch, tuned)")
+
+
+
+    # ============================================================
+    # Decision Tree (unconstrained) — baseline, check for overfitting
+    # ============================================================
+    print("\n=== Decision Tree (unconstrained) — target_volume_next ===")
+    dt_unconstrained = DecisionTreeRegressor(random_state=42)
+    dt_unconstrained.fit(X_train, y_train)
+    check_overfitting(dt_unconstrained, X_train, y_train, X_test, y_test, label="Unconstrained Tree")
+
+
+
+    # ============================================================
+    # Decision Tree — regularized via max_depth, using val set to
+    # pick a depth that avoids the overfitting just demonstrated
+    # ============================================================
+    print("\n=== Decision Tree — depth tuning (using validation set) ===")
+    for depth in [3, 5, 8, 10, 15, None]:
+        dt = DecisionTreeRegressor(max_depth=depth, random_state=42)
+        dt.fit(X_train, y_train)
+
+        y_pred_val = dt.predict(X_val)
+        val_metrics = regression_metrics(y_val, y_pred_val, label=f"max_depth={depth}, Val")
+
+
+
+    # ============================================================
+    # Decision Tree — final model at max_depth=10, evaluated on TEST
+    # (val was only used to select the hyperparameter; test must
+    # remain untouched until this final evaluation)
+    # ============================================================
+    print("\n=== Decision Tree (max_depth=10, final) — target_volume_next ===")
+    dt_final = DecisionTreeRegressor(max_depth=10, random_state=42)
+    dt_final.fit(X_train, y_train)
+
+    y_pred_test_dt = dt_final.predict(X_test)
+    metrics_dt = regression_metrics(y_test, y_pred_test_dt, label="Test (final)")
+
+    print(f"\nPRD target MAPE <= 12%: {'PASS' if metrics_dt['mape'] <= 12 else 'FAIL'} "
+          f"(actual: {metrics_dt['mape']:.2f}%)")
+
+    # --- Feature importance, per PRD 11.3: "inspect feature importance" ---
+    importances = pd.Series(dt_final.feature_importances_, index=feature_cols).sort_values(ascending=False)
+    print("\nTop 10 feature importances:")
+    print(importances.head(10))
+
+
+
+
+
+    # ============================================================
+    # DIAGNOSTIC: how much does the tree rely on traffic_volume alone?
+    # Retrain WITHOUT it, using the same max_depth=10, compare test
+    # performance against the full-feature model.
+    # ============================================================
+    feature_cols_no_volume = [c for c in feature_cols if c != "traffic_volume"]
+
+    # Need to re-scale without that column — reuse prepare_model_data
+    X_train_nv, X_val_nv, X_test_nv, y_train_nv, y_val_nv, y_test_nv, _ = prepare_model_data(
+        train, val, test, feature_cols_no_volume, target
+    )
+
+    print("\n=== Decision Tree (max_depth=10, WITHOUT traffic_volume) — target_volume_next ===")
+    dt_no_volume = DecisionTreeRegressor(max_depth=10, random_state=42)
+    dt_no_volume.fit(X_train_nv, y_train_nv)
+
+    y_pred_test_nv = dt_no_volume.predict(X_test_nv)
+    metrics_dt_nv = regression_metrics(y_test_nv, y_pred_test_nv, label="Test (no traffic_volume)")
+
+    print(f"\nComparison:")
+    print(f"  WITH traffic_volume:    MAPE {metrics_dt['mape']:.2f}%, R² {metrics_dt['r2']:.4f}")
+    print(f"  WITHOUT traffic_volume: MAPE {metrics_dt_nv['mape']:.2f}%, R² {metrics_dt_nv['r2']:.4f}")
+
+    # Feature importance of the remaining 60 features, now forced to
+    # carry the predictive load on their own
+    importances_nv = pd.Series(
+        dt_no_volume.feature_importances_, index=feature_cols_no_volume
+    ).sort_values(ascending=False)
+    print("\nTop 10 feature importances (without traffic_volume):")
+    print(importances_nv.head(10))
