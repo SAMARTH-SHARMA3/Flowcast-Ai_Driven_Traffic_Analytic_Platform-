@@ -264,7 +264,17 @@ if __name__ == "__main__":
           f"{set(congestion_features) - set(volume_features)}")
 
     # ============================================================
-    # STEP 4a: Linear Regression (library) on target_volume_next
+    # Linear Regression (library) on target_volume_next
+    #
+    # NOTE: this baseline misses the PRD's MAPE<=12% target (actual:
+    # 15.19%). Error analysis (notebooks/03_model_diagnostics.ipynb)
+    # found this is concentrated in low-volume windows (24.2% MAPE in
+    # the lowest quintile vs 10.8% in the highest) — consistent with
+    # M4's finding that traffic_volume is right-skewed/non-normal. A
+    # log-transformed target was tested and did not meaningfully help
+    # (14.48% MAPE) while degrading RMSE/R². This is expected per the
+    # PRD's own framing of Linear Regression as an "interpretable
+    # baseline" — tree-based models are expected to perform better.
     # ============================================================
     target = "target_volume_next"
     feature_cols = get_feature_columns(df_modeling, target)
@@ -280,6 +290,5 @@ if __name__ == "__main__":
     print("\n=== Linear Regression (sklearn) — target_volume_next ===")
     metrics_lr = regression_metrics(y_test, y_pred_test, label="Test")
 
-    # PRD target: MAPE <= 12% on hold-out — check against it directly
     print(f"\nPRD target MAPE <= 12%: {'PASS' if metrics_lr['mape'] <= 12 else 'FAIL'} "
           f"(actual: {metrics_lr['mape']:.2f}%)")
