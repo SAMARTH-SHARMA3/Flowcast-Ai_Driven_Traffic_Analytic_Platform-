@@ -400,3 +400,55 @@ robust to losing its top feature, not dependent on it.
 
 
 
+### Project Structure Note (M5)
+
+To avoid re-running the full data pipeline on every model experiment,
+M5 is split: `src/ml_models.py` holds shared functions (target
+construction, time-based split, feature selection, scaling, metrics)
+plus a __main__ block that does one-time data prep and saves the
+train/val/test splits to `data/processed/model_data_volume.pkl`.
+Per-model scripts (`src/train_decision_tree.py`,
+`src/train_random_forest.py`, etc.) load this pickle rather than
+reprocessing raw data each run. **Important:** rerun `ml_models.py`
+first if anything upstream (M3 features, targets, split ratios)
+changes, since the per-model scripts depend on the pickle being current.
+
+### Decision Tree
+
+Unconstrained tree overfit severely (train RMSE 0.00/R² 1.0, test
+RMSE 93.50/MAPE 14.82%) — perfectly memorized training data. Tuned
+max_depth via validation set (grid: 3/5/8/10/15/None); max_depth=10
+was optimal (val MAPE 11.22%), confirming the expected bias-variance
+U-curve (too shallow underfits, too deep overfits).
+
+**Final (test):** RMSE 71.87, MAE 48.09, **MAPE 11.50%** (PRD target
+≤12%: **PASS** — first model to meet it), R² 0.9378.
+
+Feature importance showed traffic_volume at 90.4% — investigated
+rather than accepted at face value. Retraining without it caused only
+a marginal MAPE increase (11.50%→11.74%), confirming this reflects
+REDUNDANCY (substitutable via congestion_Free-flow, occupancy,
+road_capacity — all flagged as multicollinear with traffic_volume in
+M4's VIF analysis), not fragile over-reliance on one feature.
+
+### Random Forest
+
+Grid search over n_estimators (50/100/200) × max_depth (10/15/None)
+on validation. Best: n_estimators=200, max_depth=None (val MAPE
+10.10%) — notably, unconstrained depth performed WELL here (unlike
+the single Decision Tree), since averaging across 200 independently-
+sampled trees cancels out individual-tree overfitting, which is the
+core mechanism bagging is designed to exploit.
+
+**Final (test):** RMSE 63.45, MAE 42.65, **MAPE 10.19%** (PRD target:
+**PASS**), R² 0.9515 — best regression result so far, beating Decision
+Tree and both Linear Regression variants on every metric.
+
+### Scoreboard So Far (target_volume_next, test set)
+
+| Model | RMSE | MAE | MAPE | R² | PRD Target (≤12%) |
+|---|---|---|---|---|---|
+| Linear Regression (sklearn) | 77.85 | 55.59 | 15.19% | 0.9270 | FAIL |
+| Linear Regression (NumPy scratch) | 77.98 | 55.83 | 15.35% | 0.9268 | FAIL |
+| Decision Tree (depth=10) | 71.87 | 48.09 | 11.50% | 0.9378 | PASS |
+| Random Forest (200, None) | 63.45 | 42.65 | **10.19%** | **0.9515** | PASS |

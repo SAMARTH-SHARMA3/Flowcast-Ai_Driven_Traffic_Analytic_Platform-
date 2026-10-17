@@ -1,24 +1,24 @@
 """
-M5: Classical ML Engine
--------------------------
-Trains, tunes, and compares classical ML models (Linear Regression,
-Decision Tree, Random Forest, XGBoost, SVM) on 4 forecasting targets:
-traffic volume, travel time (regression), congestion level, accident
-risk (classification). Per PRD Section 11.
+M5: Classical ML Engine — Shared Library & Data Prep
+-------------------------------------------------------
+Contains the functions reused across all per-model training scripts
+(train_decision_tree.py, train_random_forest.py, etc.), and a __main__
+block that runs ONLY the expensive one-time data prep (targets, split,
+features) and the two fast Linear Regression models, then saves the
+split DataFrames to a pickle for reuse — avoiding re-running the full
+pipeline every time a slower model (Random Forest, XGBoost) is tuned.
 
-All targets are FORWARD-LOOKING ("next window") — this is forecasting,
-not same-window estimation. Section 11.1's framing: "predict next-
-window volume... from lag, weather and calendar features" means the
-target must be the FUTURE reading, built via shift(-1), mirroring the
-backward shift() used for lag features in M3.
+IMPORTANT: if you change anything upstream (M3 features, target
+construction, split ratios), rerun this file FIRST to regenerate the
+pickle before running any train_*.py script — they load from the
+pickle, not from flowcast_features.parquet directly.
 """
 
 import pandas as pd
 import numpy as np
 import logging
+import pickle
 
-
-from sklearn.tree import DecisionTreeRegressor
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import (
@@ -31,30 +31,17 @@ logger = logging.getLogger("ml_models")
 
 
 # ============================================================
-# STEP 1: Forward-looking ("next window") forecasting targets
+# Forward-looking ("next window") forecasting targets
 # ============================================================
 def add_forecast_targets(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Build the 4 forward-looking ("next window") targets per PRD 11.1:
-    - target_volume_next: next-window traffic_volume (regression)
-    - target_travel_time_next: next-window travel_time (regression)
-    - target_congestion_next: next-window congestion_level (4-class)
-    - target_accident_next: next-window binary accident flag
-
+    Build the 4 forward-looking ("next window") targets per PRD 11.1.
     Uses shift(-1), grouped by road_id — the mirror image of M3's
-    lag features (shift(+N) looks backward; shift(-1) looks forward).
-    Same per-road discipline applies: must never let a value cross
-    from one road's series into another's.
-
-    The LAST row of each road's time series will get NaN for every
-    target (there is no "next window" to look forward to) — this is
-    expected, not a bug; these rows must be dropped before training.
+    backward shift() for lag features. The LAST row of each road's
+    series gets NaN for every target (no "next window" to look to).
     """
     df = df.sort_values(["road_id", "timestamp"]).reset_index(drop=True)
 
-    # Binary accident flag FIRST (current window), then shift forward.
-    # Per M4 Section 5.4: accident_count is 99%+ zero — binary framing
-    # (any incident vs none) is more tractable than 3-class.
     df["accident_flag"] = (df["accident_count"] > 0).astype(int)
 
     target_specs = {
@@ -67,34 +54,22 @@ def add_forecast_targets(df: pd.DataFrame) -> pd.DataFrame:
     for target_col, source_col in target_specs.items():
         df[target_col] = df.groupby("road_id")[source_col].shift(-1)
         n_null = df[target_col].isnull().sum()
-        logger.info(f"{target_col}: {n_null} nulls (expected — one per road, the series' last row)")
+        logger.info(f"{target_col}: {n_null} nulls (expected — one per road, series' last row)")
 
     return df
 
 
 # ============================================================
-# STEP 2: Time-based train/val/test split
+# Time-based train/val/test split
 # ============================================================
 def time_based_split(
-    df: pd.DataFrame,
-    train_frac: float = 0.70,
-    val_frac: float = 0.15,
+    df: pd.DataFrame, train_frac: float = 0.70, val_frac: float = 0.15,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
-    Split chronologically into train / validation / test, per PRD 11.3:
-    "earliest windows for training, latest for testing — never randomly."
-
-    train_frac=0.70, val_frac=0.15 leaves 0.15 for test (5 months of
-    data: ~3.5 months train, ~3 weeks val, ~3 weeks test).
-
-    CRITICAL: this splits by TIME, not by row count per road — every
-    road contributes to all three sets, but the actual calendar cutoff
-    dates are shared across all roads. This matters because the model
-    must be evaluated on "the future, corridor-wide," not on a
-    road-by-road shuffle.
+    Split chronologically, per PRD 11.3: "earliest for training,
+    latest for testing — never randomly."
     """
     df = df.sort_values("timestamp").reset_index(drop=True)
-
     unique_timestamps = df["timestamp"].sort_values().unique()
     n = len(unique_timestamps)
 
@@ -109,7 +84,6 @@ def time_based_split(
     logger.info(f"Val:   {len(val)} rows, {val['timestamp'].min()} to {val['timestamp'].max()}")
     logger.info(f"Test:  {len(test)} rows, {test['timestamp'].min()} to {test['timestamp'].max()}")
 
-    # Sanity assertion: no overlap, no gaps, chronological order preserved
     assert train["timestamp"].max() < val["timestamp"].min(), "Train/val overlap detected!"
     assert val["timestamp"].max() < test["timestamp"].min(), "Val/test overlap detected!"
 
@@ -117,22 +91,16 @@ def time_based_split(
 
 
 # ============================================================
-# STEP 3: Per-target feature selection
+# Per-target feature selection
 # ============================================================
 def get_feature_columns(df: pd.DataFrame, target: str) -> list[str]:
     """
-    Return the list of valid feature columns for a given target,
-    excluding IDs/strings, all 4 target columns, and (for
-    target_volume_next specifically) the near-duplicate columns
-    flagged in M4 Section 5.2 (v_c_ratio, capacity_headroom,
-    vehicle_count — algebraic restatements of CURRENT traffic_volume).
-
-    congestion_level's one-hot columns (congestion_Free-flow, etc.)
-    ARE included for every target, including target_congestion_next —
-    using the CURRENT window's congestion to help predict the NEXT
-    window's congestion is legitimate forecasting signal, not leakage
-    (unlike v_c_ratio, which is mathematically derived from the exact
-    value being predicted when volume is the target).
+    Valid feature columns for a given target. Excludes IDs/strings,
+    all 4 target columns, and (for target_volume_next specifically)
+    v_c_ratio/capacity_headroom/vehicle_count — near-duplicates of
+    CURRENT traffic_volume (M4 Section 5.2). congestion_level's
+    one-hot columns ARE included for every target (legitimate current-
+    window signal, not leakage).
     """
     always_exclude = {
         "road_id", "road_name", "weather_station_id", "date", "time",
@@ -146,51 +114,36 @@ def get_feature_columns(df: pd.DataFrame, target: str) -> list[str]:
     if target == "target_volume_next":
         exclude |= {"v_c_ratio", "capacity_headroom", "vehicle_count"}
 
-    # congestion_level itself (the raw string) is excluded — its
-    # one-hot encoded version (congestion_Free-flow, etc.) is used instead
     feature_cols = [c for c in df.columns if c not in exclude and c != "congestion_level"]
     return feature_cols
 
 
 # ============================================================
-# STEP 4: Scaling + data prep for modeling
+# Scaling + data prep (fit scaler on TRAIN only, per PRD 11.3)
 # ============================================================
 def prepare_model_data(
     train: pd.DataFrame, val: pd.DataFrame, test: pd.DataFrame,
     feature_cols: list[str], target_col: str,
 ):
     """
-    Prepare scaled X/y arrays for train/val/test, per PRD 11.3:
-    "Fit scalers on the training split only; apply to validation and test."
-
-    Drops any row with NaN in the feature set (lag/rolling series-start
-    nulls) or in the target — a model cannot train or be evaluated on
-    missing values. Reports how many rows this costs, since a large
-    drop would be worth knowing about.
-
-    CRITICAL: StandardScaler is fit ONLY on train. Val/test are
-    transformed using train's fitted mean/std — never re-fit. Fitting
-    on the full dataset would leak test-set distribution information
-    into scaling, a subtle form of data leakage.
+    Scaled X/y arrays for train/val/test. Drops rows with NaN in
+    features/target (lag/rolling series-start nulls). StandardScaler
+    fit ONLY on train — val/test are transformed, never re-fit
+    (fitting on the full dataset would leak test-distribution info
+    into scaling).
     """
     def clean(df):
         before = len(df)
         df_clean = df.dropna(subset=feature_cols + [target_col])
-        logger.info(f"  Dropped {before - len(df_clean)} rows with NaN in features/target "
-                    f"({before} -> {len(df_clean)})")
+        logger.info(f"  Dropped {before - len(df_clean)} rows with NaN ({before} -> {len(df_clean)})")
         return df_clean
 
-    logger.info("Cleaning train:")
-    train_c = clean(train)
-    logger.info("Cleaning val:")
-    val_c = clean(val)
-    logger.info("Cleaning test:")
-    test_c = clean(test)
+    train_c, val_c, test_c = clean(train), clean(val), clean(test)
 
     scaler = StandardScaler()
-    X_train = scaler.fit_transform(train_c[feature_cols])  # fit + transform on train
-    X_val = scaler.transform(val_c[feature_cols])            # transform only
-    X_test = scaler.transform(test_c[feature_cols])          # transform only
+    X_train = scaler.fit_transform(train_c[feature_cols])
+    X_val = scaler.transform(val_c[feature_cols])
+    X_test = scaler.transform(test_c[feature_cols])
 
     y_train = train_c[target_col].values
     y_val = val_c[target_col].values
@@ -200,39 +153,41 @@ def prepare_model_data(
 
 
 # ============================================================
-# STEP 5: Regression metrics (PRD 13.2)
+# Regression metrics (PRD 13.2: RMSE primary, MAE/MAPE/R² supporting)
 # ============================================================
 def regression_metrics(y_true, y_pred, label: str = "") -> dict:
-    """
-    Compute the metrics PRD 13.2 specifies for regression targets:
-    RMSE (primary), MAE, MAPE, R² (supporting).
-    """
     rmse = np.sqrt(mean_squared_error(y_true, y_pred))
     mae = mean_absolute_error(y_true, y_pred)
     mape = mean_absolute_percentage_error(y_true, y_pred) * 100
     r2 = r2_score(y_true, y_pred)
-
     logger.info(f"{label} — RMSE: {rmse:.2f}, MAE: {mae:.2f}, MAPE: {mape:.2f}%, R²: {r2:.4f}")
     return {"rmse": rmse, "mae": mae, "mape": mape, "r2": r2}
 
 
+# ============================================================
+# Overfitting check (train vs. test comparison)
+# ============================================================
+def check_overfitting(model, X_train, y_train, X_test, y_test, label: str = "") -> None:
+    """Large train-vs-test gap signals overfitting — especially
+    relevant for unconstrained Decision Trees, which can perfectly
+    memorize training data."""
+    y_pred_train = model.predict(X_train)
+    y_pred_test = model.predict(X_test)
+    print(f"\n--- {label}: Train vs. Test ---")
+    regression_metrics(y_train, y_pred_train, label="Train")
+    regression_metrics(y_test, y_pred_test, label="Test")
+
+
+# ============================================================
+# Linear Regression from scratch (NumPy), per Build-it-once rule
+# ============================================================
 class LinearRegressionScratch:
     """
-    Linear Regression trained via batch gradient descent, implemented
-    directly with NumPy — no sklearn — per the PRD's Build-it-once
-    rule (Section 10.2): "at least one linear-regression training loop
-    and the loss/gradient computations must be implemented directly
-    with NumPy... to demonstrate the gradient-descent and cost-function
-    mathematics rather than hiding them behind a call."
-
-    Model: ŷ = Xw + b
-    Cost (MSE): J(w,b) = (1/n) * sum((ŷ - y)^2)
-    Gradients: dJ/dw = (2/n) * X^T(ŷ - y)
-               dJ/db = (2/n) * sum(ŷ - y)
-    Update rule: w = w - lr * dJ/dw   (same for b)
+    Batch gradient descent, implemented directly with NumPy.
+    Model: ŷ = Xw + b | Cost (MSE): J = mean((ŷ-y)^2)
+    Gradients: dJ/dw = (2/n)X^T(ŷ-y), dJ/db = (2/n)sum(ŷ-y)
     """
-
-    def __init__(self, learning_rate: float = 0.01, n_iterations: int = 1000):
+    def __init__(self, learning_rate: float = 0.03, n_iterations: int = 3000):
         self.learning_rate = learning_rate
         self.n_iterations = n_iterations
         self.weights = None
@@ -248,239 +203,62 @@ class LinearRegressionScratch:
             y_pred = X @ self.weights + self.bias
             cost = np.mean((y_pred - y) ** 2)
 
-            # Divergence guard: if cost explodes or becomes NaN, stop
-            # immediately rather than continuing to compute garbage.
-            # This is exactly what happened at learning_rate=0.1 — the
-            # step size was too large, causing gradient descent to
-            # overshoot the minimum and diverge exponentially.
+            # Divergence guard — stop if too-high a learning rate
+            # caused gradient descent to overshoot and blow up.
             if not np.isfinite(cost):
-                logger.warning(f"Iteration {i}: cost diverged (non-finite) — "
-                                f"learning_rate={self.learning_rate} is too high. Stopping early.")
+                logger.warning(f"Iteration {i}: cost diverged — learning_rate too high. Stopping.")
                 break
 
             self.cost_history.append(cost)
-
             error = y_pred - y
             dw = (2 / n_samples) * (X.T @ error)
             db = (2 / n_samples) * np.sum(error)
-
             self.weights -= self.learning_rate * dw
             self.bias -= self.learning_rate * db
 
-            if i % 100 == 0:
+            if i % 500 == 0:
                 logger.info(f"  Iteration {i}: cost = {cost:.2f}")
 
         return self
 
-    
     def predict(self, X: np.ndarray) -> np.ndarray:
         return X @ self.weights + self.bias
 
 
-
-
-def check_overfitting(model, X_train, y_train, X_test, y_test, label: str = "") -> None:
-    """
-    Compare train vs. test performance — a large gap (train much
-    better than test) is the signature of overfitting, especially
-    important to check for Decision Trees, which can perfectly
-    memorize training data if left unconstrained (unlimited depth).
-    """
-    y_pred_train = model.predict(X_train)
-    y_pred_test = model.predict(X_test)
-
-    print(f"\n--- {label}: Train vs. Test ---")
-    train_metrics = regression_metrics(y_train, y_pred_train, label="Train")
-    test_metrics = regression_metrics(y_test, y_pred_test, label="Test")
-
-    gap = train_metrics["rmse"] - test_metrics["rmse"]
-    print(f"RMSE gap (train - test): {gap:.2f} "
-          f"({'overfitting concern' if test_metrics['rmse'] > train_metrics['rmse'] * 1.3 else 'reasonable'})")
-
-
-
-# ============================================================
-# MAIN: run the pipeline built so far
-# ============================================================
 if __name__ == "__main__":
-    # --- Load feature-engineered dataset from M3 ---
+    # --- Load + build targets (one-time, relatively cheap) ---
     df = pd.read_parquet("data/processed/flowcast_features.parquet")
     logger.info(f"Loaded flowcast_features.parquet: {df.shape}")
-
-    # --- Build forecasting targets ---
     df = add_forecast_targets(df)
-    print("\nFinal shape:", df.shape)
 
-    # --- Verify targets are genuinely forward-looking (not same-window) ---
-    sample = df[df["road_id"] == "NL-007"][
-        ["timestamp", "traffic_volume", "target_volume_next", "congestion_level", "target_congestion_next"]
-    ].head(6)
-    print("\nVerification sample (NL-007):")
-    print(sample)
-
-    last_row = df[df["road_id"] == "NL-007"].tail(1)
-    print("\nLast row of NL-007's series (targets should be NaN):")
-    print(last_row[["timestamp", "target_volume_next", "target_congestion_next"]])
-
-    print("\nNull counts per target:")
-    for col in ["target_volume_next", "target_travel_time_next", "target_congestion_next", "target_accident_next"]:
-        print(f"  {col}: {df[col].isnull().sum()}")
-
-    # --- Drop rows with no forecasting target (each road's last row) ---
     df_modeling = df.dropna(subset=["target_volume_next", "target_congestion_next"])
-    logger.info(f"Dropped {len(df) - len(df_modeling)} rows with no next-window target "
-                f"(expected: 25, one per road)")
+    logger.info(f"Dropped {len(df) - len(df_modeling)} rows with no next-window target")
 
-    # --- Time-based split ---
     train, val, test = time_based_split(df_modeling)
 
-    print("\nSplit sizes:")
-    print(f"  Train: {len(train)} ({len(train)/len(df_modeling)*100:.1f}%)")
-    print(f"  Val:   {len(val)} ({len(val)/len(df_modeling)*100:.1f}%)")
-    print(f"  Test:  {len(test)} ({len(test)/len(df_modeling)*100:.1f}%)")
-
-    # --- Feature selection check (volume vs congestion target) ---
-    volume_features = get_feature_columns(df_modeling, "target_volume_next")
-    congestion_features = get_feature_columns(df_modeling, "target_congestion_next")
-
-    print(f"\nFeature count for volume target: {len(volume_features)}")
-    print(f"Feature count for congestion target: {len(congestion_features)}")
-    print(f"\nDifference (volume-specific exclusions): "
-          f"{set(congestion_features) - set(volume_features)}")
-
-    # ============================================================
-    # Linear Regression (library) on target_volume_next
-    #
-    # NOTE: this baseline misses the PRD's MAPE<=12% target (actual:
-    # 15.19%). Error analysis (notebooks/03_model_diagnostics.ipynb)
-    # found this is concentrated in low-volume windows (24.2% MAPE in
-    # the lowest quintile vs 10.8% in the highest) — consistent with
-    # M4's finding that traffic_volume is right-skewed/non-normal. A
-    # log-transformed target was tested and did not meaningfully help
-    # (14.48% MAPE) while degrading RMSE/R². This is expected per the
-    # PRD's own framing of Linear Regression as an "interpretable
-    # baseline" — tree-based models are expected to perform better.
-    # ============================================================
     target = "target_volume_next"
     feature_cols = get_feature_columns(df_modeling, target)
+    logger.info(f"Feature count for {target}: {len(feature_cols)}")
 
+    # --- Fast models: both Linear Regression versions ---
     X_train, X_val, X_test, y_train, y_val, y_test, scaler = prepare_model_data(
         train, val, test, feature_cols, target
     )
 
+    print("\n=== Linear Regression (sklearn) ===")
     lr = LinearRegression()
     lr.fit(X_train, y_train)
+    metrics_lr = regression_metrics(y_test, lr.predict(X_test), label="Test")
 
-    y_pred_test = lr.predict(X_test)
-    print("\n=== Linear Regression (sklearn) — target_volume_next ===")
-    metrics_lr = regression_metrics(y_test, y_pred_test, label="Test")
-
-    print(f"\nPRD target MAPE <= 12%: {'PASS' if metrics_lr['mape'] <= 12 else 'FAIL'} "
-          f"(actual: {metrics_lr['mape']:.2f}%)")
-
-
-
-    # ============================================================
-    # Linear Regression from scratch (NumPy), per PRD Build-it-once rule
-    # ============================================================
-    print("\n=== Linear Regression (from-scratch NumPy) — target_volume_next ===")
-    lr_scratch = LinearRegressionScratch(learning_rate=0.01, n_iterations=1000)
-    lr_scratch.fit(X_train, y_train)
-
-    y_pred_scratch = lr_scratch.predict(X_test)
-    metrics_scratch = regression_metrics(y_test, y_pred_scratch, label="Test (from-scratch)")
-
-    # Compare against sklearn — should be very close if gradient descent
-    # converged properly, since both are solving the same optimization
-    # problem (minimize MSE), just via different algorithms (closed-form
-    # vs. iterative).
-    print(f"\nComparison — sklearn MAPE: {metrics_lr['mape']:.2f}%, "
-          f"from-scratch MAPE: {metrics_scratch['mape']:.2f}%")
-
-
+    print("\n=== Linear Regression (from-scratch NumPy) ===")
     lr_scratch = LinearRegressionScratch(learning_rate=0.03, n_iterations=3000)
     lr_scratch.fit(X_train, y_train)
+    metrics_scratch = regression_metrics(y_test, lr_scratch.predict(X_test), label="Test")
 
-    y_pred_scratch = lr_scratch.predict(X_test)
-    metrics_scratch = regression_metrics(y_test, y_pred_scratch, label="Test (from-scratch, tuned)")
-
-
-
-    # ============================================================
-    # Decision Tree (unconstrained) — baseline, check for overfitting
-    # ============================================================
-    print("\n=== Decision Tree (unconstrained) — target_volume_next ===")
-    dt_unconstrained = DecisionTreeRegressor(random_state=42)
-    dt_unconstrained.fit(X_train, y_train)
-    check_overfitting(dt_unconstrained, X_train, y_train, X_test, y_test, label="Unconstrained Tree")
-
-
-
-    # ============================================================
-    # Decision Tree — regularized via max_depth, using val set to
-    # pick a depth that avoids the overfitting just demonstrated
-    # ============================================================
-    print("\n=== Decision Tree — depth tuning (using validation set) ===")
-    for depth in [3, 5, 8, 10, 15, None]:
-        dt = DecisionTreeRegressor(max_depth=depth, random_state=42)
-        dt.fit(X_train, y_train)
-
-        y_pred_val = dt.predict(X_val)
-        val_metrics = regression_metrics(y_val, y_pred_val, label=f"max_depth={depth}, Val")
-
-
-
-    # ============================================================
-    # Decision Tree — final model at max_depth=10, evaluated on TEST
-    # (val was only used to select the hyperparameter; test must
-    # remain untouched until this final evaluation)
-    # ============================================================
-    print("\n=== Decision Tree (max_depth=10, final) — target_volume_next ===")
-    dt_final = DecisionTreeRegressor(max_depth=10, random_state=42)
-    dt_final.fit(X_train, y_train)
-
-    y_pred_test_dt = dt_final.predict(X_test)
-    metrics_dt = regression_metrics(y_test, y_pred_test_dt, label="Test (final)")
-
-    print(f"\nPRD target MAPE <= 12%: {'PASS' if metrics_dt['mape'] <= 12 else 'FAIL'} "
-          f"(actual: {metrics_dt['mape']:.2f}%)")
-
-    # --- Feature importance, per PRD 11.3: "inspect feature importance" ---
-    importances = pd.Series(dt_final.feature_importances_, index=feature_cols).sort_values(ascending=False)
-    print("\nTop 10 feature importances:")
-    print(importances.head(10))
-
-
-
-
-
-    # ============================================================
-    # DIAGNOSTIC: how much does the tree rely on traffic_volume alone?
-    # Retrain WITHOUT it, using the same max_depth=10, compare test
-    # performance against the full-feature model.
-    # ============================================================
-    feature_cols_no_volume = [c for c in feature_cols if c != "traffic_volume"]
-
-    # Need to re-scale without that column — reuse prepare_model_data
-    X_train_nv, X_val_nv, X_test_nv, y_train_nv, y_val_nv, y_test_nv, _ = prepare_model_data(
-        train, val, test, feature_cols_no_volume, target
-    )
-
-    print("\n=== Decision Tree (max_depth=10, WITHOUT traffic_volume) — target_volume_next ===")
-    dt_no_volume = DecisionTreeRegressor(max_depth=10, random_state=42)
-    dt_no_volume.fit(X_train_nv, y_train_nv)
-
-    y_pred_test_nv = dt_no_volume.predict(X_test_nv)
-    metrics_dt_nv = regression_metrics(y_test_nv, y_pred_test_nv, label="Test (no traffic_volume)")
-
-    print(f"\nComparison:")
-    print(f"  WITH traffic_volume:    MAPE {metrics_dt['mape']:.2f}%, R² {metrics_dt['r2']:.4f}")
-    print(f"  WITHOUT traffic_volume: MAPE {metrics_dt_nv['mape']:.2f}%, R² {metrics_dt_nv['r2']:.4f}")
-
-    # Feature importance of the remaining 60 features, now forced to
-    # carry the predictive load on their own
-    importances_nv = pd.Series(
-        dt_no_volume.feature_importances_, index=feature_cols_no_volume
-    ).sort_values(ascending=False)
-    print("\nTop 10 feature importances (without traffic_volume):")
-    print(importances_nv.head(10))
+    # --- Save split DataFrames for reuse by per-model training scripts ---
+    with open("data/processed/model_data_volume.pkl", "wb") as f:
+        pickle.dump({
+            "train": train, "val": val, "test": test,
+            "feature_cols": feature_cols, "target": target,
+        }, f)
+    logger.info("Saved train/val/test splits -> data/processed/model_data_volume.pkl")
