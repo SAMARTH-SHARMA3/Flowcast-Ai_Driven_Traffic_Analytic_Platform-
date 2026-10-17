@@ -214,6 +214,67 @@ def regression_metrics(y_true, y_pred, label: str = "") -> dict:
     return {"rmse": rmse, "mae": mae, "mape": mape, "r2": r2}
 
 
+class LinearRegressionScratch:
+    """
+    Linear Regression trained via batch gradient descent, implemented
+    directly with NumPy — no sklearn — per the PRD's Build-it-once
+    rule (Section 10.2): "at least one linear-regression training loop
+    and the loss/gradient computations must be implemented directly
+    with NumPy... to demonstrate the gradient-descent and cost-function
+    mathematics rather than hiding them behind a call."
+
+    Model: ŷ = Xw + b
+    Cost (MSE): J(w,b) = (1/n) * sum((ŷ - y)^2)
+    Gradients: dJ/dw = (2/n) * X^T(ŷ - y)
+               dJ/db = (2/n) * sum(ŷ - y)
+    Update rule: w = w - lr * dJ/dw   (same for b)
+    """
+
+    def __init__(self, learning_rate: float = 0.01, n_iterations: int = 1000):
+        self.learning_rate = learning_rate
+        self.n_iterations = n_iterations
+        self.weights = None
+        self.bias = None
+        self.cost_history = []
+
+    def fit(self, X: np.ndarray, y: np.ndarray):
+        n_samples, n_features = X.shape
+        self.weights = np.zeros(n_features)
+        self.bias = 0.0
+
+        for i in range(self.n_iterations):
+            y_pred = X @ self.weights + self.bias
+            cost = np.mean((y_pred - y) ** 2)
+
+            # Divergence guard: if cost explodes or becomes NaN, stop
+            # immediately rather than continuing to compute garbage.
+            # This is exactly what happened at learning_rate=0.1 — the
+            # step size was too large, causing gradient descent to
+            # overshoot the minimum and diverge exponentially.
+            if not np.isfinite(cost):
+                logger.warning(f"Iteration {i}: cost diverged (non-finite) — "
+                                f"learning_rate={self.learning_rate} is too high. Stopping early.")
+                break
+
+            self.cost_history.append(cost)
+
+            error = y_pred - y
+            dw = (2 / n_samples) * (X.T @ error)
+            db = (2 / n_samples) * np.sum(error)
+
+            self.weights -= self.learning_rate * dw
+            self.bias -= self.learning_rate * db
+
+            if i % 100 == 0:
+                logger.info(f"  Iteration {i}: cost = {cost:.2f}")
+
+        return self
+
+    
+    def predict(self, X: np.ndarray) -> np.ndarray:
+        return X @ self.weights + self.bias
+
+
 # ============================================================
 # MAIN: run the pipeline built so far
 # ============================================================
@@ -292,3 +353,29 @@ if __name__ == "__main__":
 
     print(f"\nPRD target MAPE <= 12%: {'PASS' if metrics_lr['mape'] <= 12 else 'FAIL'} "
           f"(actual: {metrics_lr['mape']:.2f}%)")
+
+
+
+    # ============================================================
+    # Linear Regression from scratch (NumPy), per PRD Build-it-once rule
+    # ============================================================
+    print("\n=== Linear Regression (from-scratch NumPy) — target_volume_next ===")
+    lr_scratch = LinearRegressionScratch(learning_rate=0.01, n_iterations=1000)
+    lr_scratch.fit(X_train, y_train)
+
+    y_pred_scratch = lr_scratch.predict(X_test)
+    metrics_scratch = regression_metrics(y_test, y_pred_scratch, label="Test (from-scratch)")
+
+    # Compare against sklearn — should be very close if gradient descent
+    # converged properly, since both are solving the same optimization
+    # problem (minimize MSE), just via different algorithms (closed-form
+    # vs. iterative).
+    print(f"\nComparison — sklearn MAPE: {metrics_lr['mape']:.2f}%, "
+          f"from-scratch MAPE: {metrics_scratch['mape']:.2f}%")
+
+
+    lr_scratch = LinearRegressionScratch(learning_rate=0.03, n_iterations=3000)
+    lr_scratch.fit(X_train, y_train)
+
+    y_pred_scratch = lr_scratch.predict(X_test)
+    metrics_scratch = regression_metrics(y_test, y_pred_scratch, label="Test (from-scratch, tuned)")

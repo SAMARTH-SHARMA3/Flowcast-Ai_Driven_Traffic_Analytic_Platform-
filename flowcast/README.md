@@ -368,4 +368,22 @@ Regression as an "interpretable baseline," with tree-based models
 this non-linear, non-normal data (per M4's normality findings).
 
 
+### Linear Regression — From-Scratch NumPy (Build-it-once rule)
+
+Implemented via batch gradient descent (MSE cost, analytic gradients),
+no sklearn. First attempt (lr=0.01, 1000 iter) under-converged
+(MAPE 16.69% vs sklearn's 15.19%) — cost was still visibly decreasing
+at iteration 900, not yet at the optimum. A second attempt at lr=0.1
+diverged entirely (cost grew to inf/NaN within ~500 iterations) — too
+large a step size caused gradient descent to overshoot the cost
+minimum and compound exponentially; this failure mode is now guarded
+against (training stops early with a warning if cost becomes non-finite).
+
+Final: lr=0.03, 3000 iterations — smooth, monotonic convergence to
+RMSE 77.98, MAE 55.83, MAPE 15.35%, R² 0.9268 — within 0.2% of
+sklearn's closed-form solution (RMSE 77.85, MAPE 15.19%, R² 0.9270)
+on every metric, confirming the implementation correctly solves the
+same optimization problem via a different method.
+
+
 
