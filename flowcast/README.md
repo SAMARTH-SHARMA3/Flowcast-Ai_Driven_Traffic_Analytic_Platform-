@@ -346,4 +346,26 @@ Train 70% (2025-01-01 to 2025-04-16, 123,691 rows), Validation 15%
 (each road's final timestamp) were dropped before splitting.
 
 
+### Linear Regression Baseline (target_volume_next)
+
+sklearn LinearRegression: RMSE 77.85, MAE 55.59, MAPE 15.19%, R² 0.927
+(PRD target: MAPE ≤12%, not met by this baseline).
+
+Error analysis (see notebooks/03_model_diagnostics.ipynb) found MAPE
+is concentrated in low-volume windows: 24.2% in the lowest quintile of
+actual traffic_volume vs. 10.8% in the highest — consistent with M4's
+finding that traffic_volume is right-skewed and non-normal. A
+log-transformed target was tested (log1p(volume) as training target,
+expm1 to de-transform predictions) but did not meaningfully improve
+MAPE (14.48%) while degrading RMSE/R² (97.81 / 0.885) — indicating
+the limitation is Linear Regression's model capacity (a single global
+linear relationship can't capture both low-traffic and high-congestion
+regimes well), not merely a scale/transform issue.
+
+This is expected and consistent with the PRD's own framing of Linear
+Regression as an "interpretable baseline," with tree-based models
+(Decision Tree, Random Forest, XGBoost) expected to perform better on
+this non-linear, non-normal data (per M4's normality findings).
+
+
 
