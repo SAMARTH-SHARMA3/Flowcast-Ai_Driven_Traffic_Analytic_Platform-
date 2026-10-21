@@ -452,3 +452,44 @@ Tree and both Linear Regression variants on every metric.
 | Linear Regression (NumPy scratch) | 77.98 | 55.83 | 15.35% | 0.9268 | FAIL |
 | Decision Tree (depth=10) | 71.87 | 48.09 | 11.50% | 0.9378 | PASS |
 | Random Forest (200, None) | 63.45 | 42.65 | **10.19%** | **0.9515** | PASS |
+
+
+
+
+### XGBoost
+
+Hyperparameter search over max_depth (4/6/8) × learning_rate
+(0.01/0.05/0.1), with early stopping (20 rounds patience) on the
+validation set rather than a fixed boosting-round count — lets each
+configuration find its own natural stopping point. A follow-up check
+with a higher ceiling (3000 rounds) confirmed the lr=0.01 configs had
+genuinely converged, not been artificially capped, validating the
+original comparison.
+
+Best: max_depth=8, learning_rate=0.1 (val MAPE 10.11%, converging in
+just 114 rounds).
+
+**Final (test):** RMSE 61.99, MAE 41.81, **MAPE 9.98%** (first model
+under 10%), R² 0.9537 — best result on every metric, confirming the
+PRD's prediction as the top classical performer.
+
+Feature importance is notably more distributed than Decision
+Tree/Random Forest: traffic_volume drops to 66.0% (vs. 86-90% for the
+tree-based bagging models), with is_rush_hour (6.3%), hour_cos (4.7%),
+and avg_speed_rolling_mean_4/8 (2.5%/2.3%) all contributing
+meaningfully. This reflects boosting's core mechanism — each
+successive tree targets the residual errors of previous trees, so
+once early trees exhaust traffic_volume's explanatory power, later
+trees are forced to extract signal from the engineered features
+(rush-hour flags, rolling stats, calendar effects) — a concrete
+demonstration that M3's feature engineering work pays off.
+
+### Scoreboard So Far (target_volume_next, test set)
+
+| Model | RMSE | MAE | MAPE | R² | PRD Target (≤12%) |
+|---|---|---|---|---|---|
+| Linear Regression (sklearn) | 77.85 | 55.59 | 15.19% | 0.9270 | FAIL |
+| Linear Regression (NumPy scratch) | 77.98 | 55.83 | 15.35% | 0.9268 | FAIL |
+| Decision Tree (depth=10) | 71.87 | 48.09 | 11.50% | 0.9378 | PASS |
+| Random Forest (200, None) | 63.45 | 42.65 | 10.19% | 0.9515 | PASS |
+| XGBoost (depth=8, lr=0.1) | 61.99 | 41.81 | **9.98%** | **0.9537** | PASS |

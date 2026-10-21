@@ -57,3 +57,49 @@ for max_depth in [4, 6, 8]:
 xgb_results_df = pd.DataFrame(xgb_results).sort_values("mape")
 print("\nAll configurations, sorted by MAPE:")
 print(xgb_results_df)
+
+
+
+# ============================================================
+# Follow-up: did lr=0.01 configs actually converge, or were
+# they artificially capped at n_estimators=1000?
+# ============================================================
+print("\n=== Follow-up: lr=0.01 with higher ceiling ===")
+for max_depth in [4, 6]:
+    model = xgb.XGBRegressor(
+        n_estimators=3000, max_depth=max_depth, learning_rate=0.01,
+        random_state=42, early_stopping_rounds=20, eval_metric="rmse",
+    )
+    model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
+    regression_metrics(
+        y_val, model.predict(X_val),
+        label=f"depth={max_depth}, lr=0.01, best_iter={model.best_iteration} (ceiling=3000), Val"
+    )
+
+
+
+
+    # ============================================================
+# Final model: max_depth=8, learning_rate=0.1 — evaluated on TEST
+# ============================================================
+print("\n=== XGBoost (depth=8, lr=0.1, final) ===")
+xgb_final = xgb.XGBRegressor(
+    n_estimators=1000, max_depth=8, learning_rate=0.1,
+    random_state=42, early_stopping_rounds=20, eval_metric="rmse",
+)
+xgb_final.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
+print(f"Final model used {xgb_final.best_iteration} boosting rounds")
+
+metrics_xgb = regression_metrics(y_test, xgb_final.predict(X_test), label="Test (final)")
+print(f"PRD MAPE <= 12%: {'PASS' if metrics_xgb['mape'] <= 12 else 'FAIL'} ({metrics_xgb['mape']:.2f}%)")
+
+importances_xgb = pd.Series(xgb_final.feature_importances_, index=feature_cols).sort_values(ascending=False)
+print("\nTop 10 feature importances:")
+print(importances_xgb.head(10))
+
+print(f"\nComparison across all models (test MAPE):")
+print(f"  Linear Regression (sklearn):  15.19%")
+print(f"  Linear Regression (scratch):  15.35%")
+print(f"  Decision Tree (depth=10):     11.50%")
+print(f"  Random Forest (200, None):    10.19%")
+print(f"  XGBoost (depth=8, lr=0.1):    {metrics_xgb['mape']:.2f}%")
