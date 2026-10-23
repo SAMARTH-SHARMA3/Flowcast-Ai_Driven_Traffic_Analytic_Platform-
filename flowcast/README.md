@@ -31,7 +31,7 @@ sensor windows, January–May 2025 (~178K raw traffic readings).
 
 ### Setup
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/SAMARTH-SHARMA3/Flowcast-Ai_Driven_Traffic_Analytic_Platform-/tree
 cd Flowcast-Ai_Driven_Traffic_Analytic_Platform-/flowcast
 python3 -m venv .venv
 source .venv/bin/activate
