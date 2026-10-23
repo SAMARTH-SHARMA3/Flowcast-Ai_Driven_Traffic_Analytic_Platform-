@@ -16,9 +16,9 @@ sensor windows, January–May 2025 (~178K raw traffic readings).
 |---|---|---|
 | M1 | Ingestion & Validation | ✅ Complete |
 | M2 | Cleaning & Merging | ✅ Complete |
-| M3 | Feature Engineering | ⏳ Not started |
-| M4 | Classical ML Models | ⏳ Not started |
-| M5 | Deep Learning (LSTM) | ⏳ Not started |
+| M3 | Feature Engineering | ✅ Complete |
+| M4 | Classical ML Models | ✅ Complete |
+| M5 | Deep Learning (LSTM) | ✅ Complete |
 | M6 | Dashboard | ⏳ Not started |
 
 ---
