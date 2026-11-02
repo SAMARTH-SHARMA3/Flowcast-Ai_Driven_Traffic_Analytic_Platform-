@@ -271,3 +271,10 @@ if __name__ == "__main__":
                 "feature_cols": feature_cols, "target": target,
             }, f)
         logger.info(f"Saved train/val/test splits -> {pickle_path}")
+
+
+        # Persistence baseline: predict next window = current window
+        current_col = "traffic_volume" if target == "target_volume_next" else "travel_time"
+        test_c = test.dropna(subset=feature_cols + [target])
+        print(f"\n=== Persistence baseline — {target} ===")
+        regression_metrics(test_c[target].values, test_c[current_col].values, label="Test (persistence)")

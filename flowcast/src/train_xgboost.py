@@ -47,6 +47,11 @@ X_train, X_val, X_test, y_train, y_val, y_test, scaler = prepare_model_data(
 select_metric = "mape" if args.target == "volume" else "rmse"
 print(f"Model selection metric (validation): {select_metric.upper()}")
 
+# Depth grid is target-specific: for travel_time the best depth sat at
+# the lower edge (4), so shallower depths are added for that target.
+# Volume keeps its original grid so its documented results reproduce.
+depth_grid = [4, 6, 8] if args.target == "volume" else [2, 3, 4, 6, 8]
+
 # ============================================================
 # Boosting setup. Early stopping halts training once validation
 # RMSE has not improved for EARLY_STOP consecutive rounds, so the
@@ -86,7 +91,7 @@ print("\n=== XGBoost — hyperparameter search (validation set, early stopping) 
 
 results = []
 models = {}  # keep each fitted model so the winner needs no retraining
-for max_depth in [4, 6, 8]:
+for max_depth in depth_grid:
     for learning_rate in [0.01, 0.05, 0.1]:
         ceiling = BASE_CEILING
         model = fit_xgb(max_depth, learning_rate, ceiling)

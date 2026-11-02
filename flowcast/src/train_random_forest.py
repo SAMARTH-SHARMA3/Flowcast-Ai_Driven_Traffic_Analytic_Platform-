@@ -48,6 +48,14 @@ X_train, X_val, X_test, y_train, y_val, y_test, scaler = prepare_model_data(
 select_metric = "mape" if args.target == "volume" else "rmse"
 print(f"Model selection metric (validation): {select_metric.upper()}")
 
+
+# Depth grid is target-specific: for travel_time the first run showed
+# validation RMSE rising monotonically with depth (best at the lower
+# edge, depth 10), so shallower depths are added for that target.
+# Volume keeps its original grid so its documented results stay
+# reproducible.
+depth_grid = [10, 15, None] if args.target == "volume" else [5, 8, 10, 15, None]
+
 # ============================================================
 # Grid search over n_estimators x max_depth, evaluated on VAL
 # (n_jobs=-1 parallelizes tree training across CPU cores)
@@ -55,7 +63,7 @@ print(f"Model selection metric (validation): {select_metric.upper()}")
 print("\n=== Random Forest — hyperparameter search (validation set) ===")
 rf_results = []
 for n_est in [50, 100, 200]:
-    for depth in [10, 15, None]:
+    for depth in depth_grid:
         rf = RandomForestRegressor(
             n_estimators=n_est, max_depth=depth, random_state=42, n_jobs=-1
         )
@@ -78,8 +86,8 @@ print(f"\nSelected: n_estimators={best_n}, max_depth={best_depth} "
 
 # If the winning depth is the shallowest in the grid, a shallower
 # forest might do better — worth widening the grid and rerunning.
-if best_depth == 10:
-    print("NOTE: best depth is at the lower edge of the grid — consider trying shallower depths.")
+if best_depth == depth_grid[0]:
+    print(f"NOTE: best depth ({best_depth}) is at the lower edge of the grid — consider trying shallower depths.")
 
 # ============================================================
 # Final model at the selected config — evaluated on TEST
