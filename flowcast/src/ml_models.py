@@ -226,7 +226,7 @@ class LinearRegressionScratch:
 
 
 if __name__ == "__main__":
-    # --- Load + build targets (one-time, relatively cheap) ---
+    # --- Load + build targets (one-time, shared across all targets) ---
     df = pd.read_parquet("data/processed/flowcast_features.parquet")
     logger.info(f"Loaded flowcast_features.parquet: {df.shape}")
     df = add_forecast_targets(df)
@@ -236,29 +236,38 @@ if __name__ == "__main__":
 
     train, val, test = time_based_split(df_modeling)
 
-    target = "target_volume_next"
-    feature_cols = get_feature_columns(df_modeling, target)
-    logger.info(f"Feature count for {target}: {len(feature_cols)}")
+    # ============================================================
+    # Run the fast Linear Regression baseline + save a pickle for
+    # EACH regression target — target_volume_next and
+    # target_travel_time_next both go through FR-07's 4 models.
+    # ============================================================
+    for target in ["target_volume_next", "target_travel_time_next"]:
+        print(f"\n{'='*60}\nTARGET: {target}\n{'='*60}")
 
-    # --- Fast models: both Linear Regression versions ---
-    X_train, X_val, X_test, y_train, y_val, y_test, scaler = prepare_model_data(
-        train, val, test, feature_cols, target
-    )
+        feature_cols = get_feature_columns(df_modeling, target)
+        logger.info(f"Feature count for {target}: {len(feature_cols)}")
 
-    print("\n=== Linear Regression (sklearn) ===")
-    lr = LinearRegression()
-    lr.fit(X_train, y_train)
-    metrics_lr = regression_metrics(y_test, lr.predict(X_test), label="Test")
+        X_train, X_val, X_test, y_train, y_val, y_test, scaler = prepare_model_data(
+            train, val, test, feature_cols, target
+        )
 
-    print("\n=== Linear Regression (from-scratch NumPy) ===")
-    lr_scratch = LinearRegressionScratch(learning_rate=0.03, n_iterations=3000)
-    lr_scratch.fit(X_train, y_train)
-    metrics_scratch = regression_metrics(y_test, lr_scratch.predict(X_test), label="Test")
+        print(f"\n=== Linear Regression (sklearn) — {target} ===")
+        lr = LinearRegression()
+        lr.fit(X_train, y_train)
+        metrics_lr = regression_metrics(y_test, lr.predict(X_test), label="Test")
 
-    # --- Save split DataFrames for reuse by per-model training scripts ---
-    with open("data/processed/model_data_volume.pkl", "wb") as f:
-        pickle.dump({
-            "train": train, "val": val, "test": test,
-            "feature_cols": feature_cols, "target": target,
-        }, f)
-    logger.info("Saved train/val/test splits -> data/processed/model_data_volume.pkl")
+        print(f"\n=== Linear Regression (from-scratch NumPy) — {target} ===")
+        lr_scratch = LinearRegressionScratch(learning_rate=0.03, n_iterations=3000)
+        lr_scratch.fit(X_train, y_train)
+        metrics_scratch = regression_metrics(y_test, lr_scratch.predict(X_test), label="Test")
+
+        # Save pickle, named per target — e.g. model_data_volume.pkl,
+        # model_data_traveltime.pkl
+        pickle_name = target.replace("target_", "model_data_").replace("_next", "")
+        pickle_path = f"data/processed/{pickle_name}.pkl"
+        with open(pickle_path, "wb") as f:
+            pickle.dump({
+                "train": train, "val": val, "test": test,
+                "feature_cols": feature_cols, "target": target,
+            }, f)
+        logger.info(f"Saved train/val/test splits -> {pickle_path}")
