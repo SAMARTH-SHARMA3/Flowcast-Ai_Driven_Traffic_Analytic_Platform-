@@ -493,3 +493,56 @@ demonstration that M3's feature engineering work pays off.
 | Decision Tree (depth=10) | 71.87 | 48.09 | 11.50% | 0.9378 | PASS |
 | Random Forest (200, None) | 63.45 | 42.65 | 10.19% | 0.9515 | PASS |
 | XGBoost (depth=8, lr=0.1) | 61.99 | 41.81 | **9.98%** | **0.9537** | PASS |
+
+
+
+### Travel Time (target_travel_time_next)
+
+Same four models and protocol as volume: hyperparameters selected on
+the validation set, final evaluation once on the untouched test set.
+Primary metric is RMSE (PRD 13.2); the PRD sets no numeric threshold
+for this target, so no pass/fail is reported. Selection used
+validation RMSE. The Random Forest and XGBoost depth grids were
+widened for this target after the first run put each winner at the
+lower edge of its grid; the winners did not move (depth 10 and depth
+4), confirming they are interior optima rather than grid artifacts.
+
+The linear baseline is weak here (R² 0.72 vs 0.93 for volume),
+consistent with M4's finding that travel_time is the most non-normal
+column (skew 3.65, kurtosis 20.5). The tree models improve on it,
+though RMSE improves less than MAPE (Decision Tree: RMSE 1.38→1.28,
+MAPE 17.1%→11.8%), which suggests the rare long trips that dominate
+RMSE remain hard — an inference from the pattern, not tested.
+
+### Scoreboards (test set)
+
+[paste the two tables above]
+
+Caveats: one chronological split with a ~3-week test window
+(2025-05-09 to 2025-05-31) and one random seed; no significance test
+on the margins between XGBoost and Random Forest (about 2.3% on volume
+RMSE, 3.5% on travel-time RMSE). The XGBoost volume winner was chosen
+on validation MAPE by a 0.017-point margin over the runner-up.
+
+
+### Persistence Baseline
+
+To check that the models add value beyond the strongest naive forecast,
+each target was also scored with "next window = current window" on the
+same test rows (26,502) as the models.
+
+| Target | Model | RMSE | MAE | MAPE | R² |
+|---|---|---|---|---|---|
+| Volume | Persistence (next = current) | 107.40 | 73.38 | 16.73% | 0.8611 |
+| Travel time | Persistence (next = current) | 1.70 | 0.68 | 14.11% | 0.5788 |
+
+All trained models beat persistence on volume on every metric; the best
+(XGBoost) reduces RMSE by 42% (107.40 → 61.99). On travel time the tree
+models beat it on every metric (XGBoost RMSE 1.70 → 1.09, -36%); Linear
+Regression beats it on RMSE/MAE/R² but not MAPE (17.12% vs 14.11%),
+consistent with MAPE penalising small-value errors on this heavy-tailed
+target.
+
+Note: because traffic is strongly autocorrelated, persistence alone
+reaches R² 0.86 on volume, so R² overstates the models' added value;
+RMSE relative to persistence is the more informative comparison.

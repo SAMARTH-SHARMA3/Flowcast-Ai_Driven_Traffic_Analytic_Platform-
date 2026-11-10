@@ -124,10 +124,14 @@ print(f"\nSelected: max_depth={best_depth}, learning_rate={best_lr}, "
       f"{best['best_iteration']} rounds (validation {select_metric.upper()}: {best[select_metric]:.4g})")
 
 # If the winner sits on an edge of the grid, the true optimum may lie
-# beyond it — worth widening the grid and rerunning.
+# beyond it — worth widening the grid and rerunning. The depth check
+# follows depth_grid, so it stays correct for both targets.
 edge_notes = []
-if best_depth in (4, 8):
-    edge_notes.append(f"max_depth={best_depth} is at an edge of the grid (4-8)")
+if best_depth in (depth_grid[0], depth_grid[-1]):
+    edge_notes.append(
+        f"max_depth={best_depth} is at an edge of the grid "
+        f"({depth_grid[0]}-{depth_grid[-1]})"
+    )
 if best_lr in (0.01, 0.1):
     edge_notes.append(f"learning_rate={best_lr} is at an edge of the grid (0.01-0.1)")
 for note in edge_notes:
@@ -167,5 +171,6 @@ if args.target == "volume":
 else:
     print("  Linear Regression (sklearn):  RMSE 1.38, R² 0.7233")
     print("  Linear Regression (scratch):  RMSE 1.38, R² 0.7233")
-    print("  (add Decision Tree / Random Forest travel-time results here once run)")
+    print("  Decision Tree (depth=8):      RMSE 1.28, R² 0.7611")
+    print("  Random Forest (200, depth=10): RMSE 1.13, R² 0.8142")
     print(f"  XGBoost:                      RMSE {metrics_xgb['rmse']:.2f}, R² {metrics_xgb['r2']:.4f}")

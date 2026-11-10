@@ -38,6 +38,19 @@ X_train, X_val, X_test, y_train, y_val, y_test, scaler = prepare_model_data(
 )
 
 # ============================================================
+# Model-selection rule (judgment call, stated explicitly):
+# - volume: select on validation MAPE — it is this target's PRD
+#   success criterion (<=12%), and it keeps the documented volume
+#   results reproducible.
+# - travel_time: select on validation RMSE — the PRD's primary
+#   regression metric, and this target has no MAPE threshold.
+# Same rule as train_random_forest.py and train_xgboost.py.
+# Selection ALWAYS uses the validation set, never test.
+# ============================================================
+select_metric = "mape" if args.target == "volume" else "rmse"
+print(f"Model selection metric (validation): {select_metric.upper()}")
+
+# ============================================================
 # Unconstrained tree — demonstrate overfitting
 # ============================================================
 print("\n=== Decision Tree (unconstrained) ===")
@@ -49,24 +62,33 @@ check_overfitting(dt_unconstrained, X_train, y_train, X_test, y_test, label="Unc
 # Depth tuning on the VALIDATION set (never test — tuning on test
 # would leak the final evaluation data into model selection)
 # ============================================================
+depth_grid = [3, 5, 8, 10, 15, None]
+
 print("\n=== Decision Tree — depth tuning (validation set) ===")
 depth_results = []
-for depth in [3, 5, 8, 10, 15, None]:
+for depth in depth_grid:
     dt = DecisionTreeRegressor(max_depth=depth, random_state=42)
     dt.fit(X_train, y_train)
     m = regression_metrics(y_val, dt.predict(X_val), label=f"max_depth={depth}, Val")
     depth_results.append({"max_depth": depth, **m})
 
-# Pick the depth with the lowest validation RMSE (RMSE is the PRD's
-# primary metric for both regression targets, Section 13.2).
-best = min(depth_results, key=lambda r: r["rmse"])
+# Selection uses the original list (not a DataFrame), so max_depth=None
+# stays a real None. On ties, min() keeps the first (shallowest) depth.
+best = min(depth_results, key=lambda r: r[select_metric])
 best_depth = best["max_depth"]
-print(f"\nSelected max_depth={best_depth} (lowest validation RMSE: {best['rmse']:.2f})")
+print(f"\nSelected max_depth={best_depth} "
+      f"(lowest validation {select_metric.upper()}: {best[select_metric]:.4g})")
 
-# If the winner sits at the edge of the grid (3 or None), the true
-# optimum may lie beyond it — worth widening the grid and rerunning.
-if best_depth in (3, None):
-    print("NOTE: best depth is at the edge of the search grid — consider widening it.")
+# Edge-of-grid checks. A winner at the SHALLOW edge means a shallower
+# tree might do better, so the grid is worth widening. A winner of None
+# (unlimited depth) cannot be widened past — but it deserves a note,
+# since an unconstrained tree is the overfitting-prone case.
+if best_depth == depth_grid[0]:
+    print(f"NOTE: best depth ({best_depth}) is at the lower edge of the grid — "
+          "consider trying shallower depths.")
+if best_depth is None:
+    print("NOTE: unconstrained depth won on validation — check the train/test "
+          "gap above before trusting it.")
 
 # ============================================================
 # Final model at the selected depth — evaluated on TEST
