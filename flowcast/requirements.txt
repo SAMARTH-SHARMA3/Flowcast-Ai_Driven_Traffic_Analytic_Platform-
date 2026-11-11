@@ -4,6 +4,6 @@ scikit-learn
 matplotlib
 seaborn
 pyyaml
-pyarrow
+pyarrow==21.0.0
 statsmodels
 xgboost

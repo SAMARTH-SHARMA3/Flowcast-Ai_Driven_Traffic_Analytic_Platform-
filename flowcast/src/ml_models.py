@@ -1,17 +1,25 @@
 """
 M5: Classical ML Engine — Shared Library & Data Prep
 -------------------------------------------------------
-Contains the functions reused across all per-model training scripts
-(train_decision_tree.py, train_random_forest.py, etc.), and a __main__
-block that runs ONLY the expensive one-time data prep (targets, split,
-features) and the two fast Linear Regression models, then saves the
-split DataFrames to a pickle for reuse — avoiding re-running the full
-pipeline every time a slower model (Random Forest, XGBoost) is tuned.
+Shared functions reused by every per-model training script
+(train_decision_tree.py, train_random_forest.py, train_xgboost.py), plus
+a __main__ block that runs the one-time data prep:
 
-IMPORTANT: if you change anything upstream (M3 features, target
+  - Regression targets (volume, travel time): fast baselines (both
+    Linear Regression versions and a naive persistence baseline), and a
+    pickle of the train/val/test splits per target.
+  - Classification targets (congestion, accident risk): class
+    distribution per split, a pickle per target, and the naive
+    baselines for congestion (majority class and persistence).
+
+The pickles let the slower models (Random Forest, XGBoost) skip
+re-running the full pipeline on every experiment.
+
+IMPORTANT: if anything upstream changes (M3 features, target
 construction, split ratios), rerun this file FIRST to regenerate the
-pickle before running any train_*.py script — they load from the
-pickle, not from flowcast_features.parquet directly.
+pickles — the train_*.py scripts load from the pickles, not from
+flowcast_features.parquet. Pickles are gitignored (they can exceed
+GitHub's 100MB limit and are regeneratable).
 """
 
 import pandas as pd
@@ -24,6 +32,7 @@ from sklearn.linear_model import LinearRegression
 from sklearn.metrics import (
     mean_squared_error, mean_absolute_error,
     mean_absolute_percentage_error, r2_score,
+    accuracy_score, f1_score, precision_recall_fscore_support, confusion_matrix,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -42,6 +51,8 @@ def add_forecast_targets(df: pd.DataFrame) -> pd.DataFrame:
     """
     df = df.sort_values(["road_id", "timestamp"]).reset_index(drop=True)
 
+    # Binary accident flag (per M4 Section 5.4: accident_count is 99%+
+    # zero, so "any incident vs none" is more tractable than 3-class)
     df["accident_flag"] = (df["accident_count"] > 0).astype(int)
 
     target_specs = {
@@ -66,8 +77,8 @@ def time_based_split(
     df: pd.DataFrame, train_frac: float = 0.70, val_frac: float = 0.15,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
-    Split chronologically, per PRD 11.3: "earliest for training,
-    latest for testing — never randomly."
+    Split chronologically, per PRD 11.3: "earliest windows for
+    training, latest for testing — never randomly."
     """
     df = df.sort_values("timestamp").reset_index(drop=True)
     unique_timestamps = df["timestamp"].sort_values().unique()
@@ -95,12 +106,12 @@ def time_based_split(
 # ============================================================
 def get_feature_columns(df: pd.DataFrame, target: str) -> list[str]:
     """
-    Valid feature columns for a given target. Excludes IDs/strings,
-    all 4 target columns, and (for target_volume_next specifically)
-    v_c_ratio/capacity_headroom/vehicle_count — near-duplicates of
-    CURRENT traffic_volume (M4 Section 5.2). congestion_level's
-    one-hot columns ARE included for every target (legitimate current-
-    window signal, not leakage).
+    Valid feature columns for a given target. Excludes IDs/strings and
+    all 4 target columns. For target_volume_next ONLY, also excludes
+    v_c_ratio / capacity_headroom / vehicle_count — near-duplicates of
+    CURRENT traffic_volume (M4 Section 5.2); for other targets they
+    remain valid. congestion_level's one-hot columns ARE included for
+    every target (legitimate current-window signal, not leakage).
     """
     always_exclude = {
         "road_id", "road_name", "weather_station_id", "date", "time",
@@ -114,23 +125,24 @@ def get_feature_columns(df: pd.DataFrame, target: str) -> list[str]:
     if target == "target_volume_next":
         exclude |= {"v_c_ratio", "capacity_headroom", "vehicle_count"}
 
-    feature_cols = [c for c in df.columns if c not in exclude and c != "congestion_level"]
-    return feature_cols
+    # The raw congestion_level string is excluded; its one-hot columns
+    # (congestion_Free-flow, etc.) are used instead.
+    return [c for c in df.columns if c not in exclude and c != "congestion_level"]
 
 
 # ============================================================
-# Scaling + data prep (fit scaler on TRAIN only, per PRD 11.3)
+# Scaling + data prep (scaler fit on TRAIN only, per PRD 11.3)
 # ============================================================
 def prepare_model_data(
     train: pd.DataFrame, val: pd.DataFrame, test: pd.DataFrame,
     feature_cols: list[str], target_col: str,
 ):
     """
-    Scaled X/y arrays for train/val/test. Drops rows with NaN in
-    features/target (lag/rolling series-start nulls). StandardScaler
-    fit ONLY on train — val/test are transformed, never re-fit
-    (fitting on the full dataset would leak test-distribution info
-    into scaling).
+    Scaled X/y arrays for train/val/test. Drops rows with NaN in the
+    features or target (lag/rolling series-start nulls). StandardScaler
+    is fit ONLY on train — val/test are transformed, never re-fit
+    (fitting on the full dataset would leak test-distribution
+    information into scaling).
     """
     def clean(df):
         before = len(df)
@@ -153,7 +165,7 @@ def prepare_model_data(
 
 
 # ============================================================
-# Regression metrics (PRD 13.2: RMSE primary, MAE/MAPE/R² supporting)
+# Regression metrics (PRD 13.2: RMSE primary; MAE, MAPE, R² supporting)
 # ============================================================
 def regression_metrics(y_true, y_pred, label: str = "") -> dict:
     rmse = np.sqrt(mean_squared_error(y_true, y_pred))
@@ -168,18 +180,56 @@ def regression_metrics(y_true, y_pred, label: str = "") -> dict:
 # Overfitting check (train vs. test comparison)
 # ============================================================
 def check_overfitting(model, X_train, y_train, X_test, y_test, label: str = "") -> None:
-    """Large train-vs-test gap signals overfitting — especially
+    """A large train-vs-test gap signals overfitting — especially
     relevant for unconstrained Decision Trees, which can perfectly
-    memorize training data."""
-    y_pred_train = model.predict(X_train)
-    y_pred_test = model.predict(X_test)
+    memorize their training data."""
     print(f"\n--- {label}: Train vs. Test ---")
-    regression_metrics(y_train, y_pred_train, label="Train")
-    regression_metrics(y_test, y_pred_test, label="Test")
+    regression_metrics(y_train, model.predict(X_train), label="Train")
+    regression_metrics(y_test, model.predict(X_test), label="Test")
 
 
 # ============================================================
-# Linear Regression from scratch (NumPy), per Build-it-once rule
+# Classification metrics (PRD 13.2)
+# ============================================================
+# Ordered Free-flow -> Severe so confusion matrices read in severity order.
+CONGESTION_ORDER = ["Free-flow", "Moderate", "Heavy", "Severe"]
+
+
+def classification_metrics(y_true, y_pred, labels: list, label: str = "") -> dict:
+    """
+    Metrics PRD 13.2 specifies for the 4-class congestion target:
+    macro-F1 (primary); per-class precision/recall, confusion matrix and
+    accuracy (supporting). zero_division=0 means a class that is never
+    predicted scores 0 instead of raising a warning.
+    """
+    acc = accuracy_score(y_true, y_pred)
+    macro_f1 = f1_score(y_true, y_pred, labels=labels, average="macro", zero_division=0)
+    prec, rec, f1, support = precision_recall_fscore_support(
+        y_true, y_pred, labels=labels, zero_division=0
+    )
+    cm = confusion_matrix(y_true, y_pred, labels=labels)
+    logger.info(f"{label} — macro-F1: {macro_f1:.4f}, accuracy: {acc:.4f}")
+    per_class = pd.DataFrame(
+        {"precision": prec, "recall": rec, "f1": f1, "support": support}, index=labels
+    )
+    return {"macro_f1": macro_f1, "accuracy": acc, "per_class": per_class, "confusion_matrix": cm}
+
+
+def show_classification_report(result: dict, labels: list) -> None:
+    """Print per-class metrics and the confusion matrix (rows = true class,
+    columns = predicted class)."""
+    print(result["per_class"].round(4))
+    cm = pd.DataFrame(
+        result["confusion_matrix"],
+        index=[f"true_{l}" for l in labels],
+        columns=[f"pred_{l}" for l in labels],
+    )
+    print("Confusion matrix (rows = true, columns = predicted):")
+    print(cm)
+
+
+# ============================================================
+# Linear Regression from scratch (NumPy) — PRD Build-it-once rule
 # ============================================================
 class LinearRegressionScratch:
     """
@@ -203,7 +253,7 @@ class LinearRegressionScratch:
             y_pred = X @ self.weights + self.bias
             cost = np.mean((y_pred - y) ** 2)
 
-            # Divergence guard — stop if too-high a learning rate
+            # Divergence guard — stop if too high a learning rate
             # caused gradient descent to overshoot and blow up.
             if not np.isfinite(cost):
                 logger.warning(f"Iteration {i}: cost diverged — learning_rate too high. Stopping.")
@@ -225,6 +275,9 @@ class LinearRegressionScratch:
         return X @ self.weights + self.bias
 
 
+# ============================================================
+# MAIN: one-time data prep, fast baselines, pickles
+# ============================================================
 if __name__ == "__main__":
     # --- Load + build targets (one-time, shared across all targets) ---
     df = pd.read_parquet("data/processed/flowcast_features.parquet")
@@ -237,9 +290,7 @@ if __name__ == "__main__":
     train, val, test = time_based_split(df_modeling)
 
     # ============================================================
-    # Run the fast Linear Regression baseline + save a pickle for
-    # EACH regression target — target_volume_next and
-    # target_travel_time_next both go through FR-07's 4 models.
+    # REGRESSION TARGETS (FR-07): fast baselines + a pickle per target
     # ============================================================
     for target in ["target_volume_next", "target_travel_time_next"]:
         print(f"\n{'='*60}\nTARGET: {target}\n{'='*60}")
@@ -261,8 +312,8 @@ if __name__ == "__main__":
         lr_scratch.fit(X_train, y_train)
         metrics_scratch = regression_metrics(y_test, lr_scratch.predict(X_test), label="Test")
 
-        # Save pickle, named per target — e.g. model_data_volume.pkl,
-        # model_data_traveltime.pkl
+        # Save pickle, named per target — model_data_volume.pkl,
+        # model_data_travel_time.pkl
         pickle_name = target.replace("target_", "model_data_").replace("_next", "")
         pickle_path = f"data/processed/{pickle_name}.pkl"
         with open(pickle_path, "wb") as f:
@@ -272,9 +323,57 @@ if __name__ == "__main__":
             }, f)
         logger.info(f"Saved train/val/test splits -> {pickle_path}")
 
-
         # Persistence baseline: predict next window = current window
         current_col = "traffic_volume" if target == "target_volume_next" else "travel_time"
         test_c = test.dropna(subset=feature_cols + [target])
         print(f"\n=== Persistence baseline — {target} ===")
         regression_metrics(test_c[target].values, test_c[current_col].values, label="Test (persistence)")
+
+    # ============================================================
+    # CLASSIFICATION TARGETS (FR-08): congestion (4-class), accident (binary)
+    # ============================================================
+    for target, name in [("target_congestion_next", "congestion"),
+                         ("target_accident_next", "accident")]:
+        print(f"\n{'='*60}\nTARGET: {target}\n{'='*60}")
+        feature_cols = get_feature_columns(df_modeling, target)
+        logger.info(f"Feature count for {target}: {len(feature_cols)}")
+
+        # Class balance in each chronological split. A time-based split can
+        # shift class frequencies, and a rare class with few test examples
+        # makes its metrics noisy — worth knowing before modelling.
+        for split_name, split_df in [("train", train), ("val", val), ("test", test)]:
+            counts = split_df[target].value_counts()
+            pct = (counts / counts.sum() * 100).round(2)
+            print(f"\n{split_name} class distribution:")
+            print(pd.DataFrame({"count": counts, "pct": pct}))
+
+        pickle_path = f"data/processed/model_data_{name}.pkl"
+        with open(pickle_path, "wb") as f:
+            pickle.dump({
+                "train": train, "val": val, "test": test,
+                "feature_cols": feature_cols, "target": target,
+            }, f)
+        logger.info(f"Saved train/val/test splits -> {pickle_path}")
+
+    # ============================================================
+    # Congestion baselines, scored on the same test rows the models will use
+    # ============================================================
+    target = "target_congestion_next"
+    feature_cols = get_feature_columns(df_modeling, target)
+    train_c = train.dropna(subset=feature_cols + [target])
+    test_c = test.dropna(subset=feature_cols + [target])
+
+    # Majority class, taken from TRAIN only (never from test)
+    majority_class = train_c[target].mode()[0]
+    print(f"\n=== Baseline: always predict '{majority_class}' (train majority) ===")
+    res = classification_metrics(
+        test_c[target], [majority_class] * len(test_c), CONGESTION_ORDER, label="Test (majority class)"
+    )
+    show_classification_report(res, CONGESTION_ORDER)
+
+    # Persistence: next window's congestion = current window's congestion
+    print("\n=== Baseline: persistence (next = current congestion level) ===")
+    res = classification_metrics(
+        test_c[target], test_c["congestion_level"], CONGESTION_ORDER, label="Test (persistence)"
+    )
+    show_classification_report(res, CONGESTION_ORDER)
