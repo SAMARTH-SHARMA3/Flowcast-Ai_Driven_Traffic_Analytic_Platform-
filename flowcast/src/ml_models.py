@@ -377,3 +377,24 @@ if __name__ == "__main__":
         test_c[target], test_c["congestion_level"], CONGESTION_ORDER, label="Test (persistence)"
     )
     show_classification_report(res, CONGESTION_ORDER)
+
+
+    # ============================================================
+    # verified how the congestion labels relate to the dictionary’s volume-to-capacity rule
+    # ============================================================
+
+    df = pd.read_parquet("data/processed/flowcast_features.parquet")
+
+def band(r):
+    # Same bands as M2's derive_congestion_level
+    if r < 0.5: return "Free-flow"
+    if r < 0.8: return "Moderate"
+    if r < 1.0: return "Heavy"
+    return "Severe"
+
+derived = df["v_c_ratio"].apply(band)
+match = (derived == df["congestion_level"])
+m = match.mean()
+print(f"Labels equal to the V/C band: {m*100:.2f}% ({match.sum()} of {len(df)})")
+print(f"Implied match rate on the ORIGINAL (non-derived) labels: {(m - 0.1507) / 0.8493 * 100:.1f}%")
+print(pd.crosstab(df["congestion_level"], derived, rownames=["label"], colnames=["V/C band"]))

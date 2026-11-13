@@ -546,3 +546,28 @@ target.
 Note: because traffic is strongly autocorrelated, persistence alone
 reaches R² 0.86 on volume, so R² overstates the models' added value;
 RMSE relative to persistence is the more informative comparison.
+
+
+
+
+
+### Classification Targets: Setup and Baselines
+
+Congestion (4-class) and accident risk (binary, any incident in the
+next window) use the same chronological split as the regression
+targets. All four congestion classes appear in every split (test:
+Free-flow 60.0%, Moderate 24.2%, Heavy 9.8%, Severe 6.0%). Accident
+positives: 1,156 (0.93%) train, 236 (0.89%) val, 260 (0.98%) test.
+
+Congestion baselines (test set, 26,502 windows):
+
+| Baseline | Macro-F1 | Accuracy |
+|---|---|---|
+| Always predict Free-flow | 0.1876 | 0.6003 |
+| Persistence (next = current) | 0.6111 | 0.7757 |
+
+The majority-class baseline reaches 60% accuracy with 0.19 macro-F1,
+which is why macro-F1 is the headline metric. Persistence errors are
+almost entirely single-step (e.g. Heavy ↔ Moderate/Severe); its weakest
+classes are Heavy (F1 0.40) and Severe (0.48). The PRD target is
+macro-F1 ≥ 0.80.
